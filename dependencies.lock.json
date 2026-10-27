@@ -1,0 +1,158 @@
+{
+  "format": 1,
+  "python": "3.12",
+  "astrbot_version": "4.29.0",
+  "napcat_version": "4.18.37",
+  "embedding_model": "bge-m3",
+  "artifacts": [
+    {
+      "name": "AstrBot-v4.29.0-source.zip",
+      "url": "https://codeload.github.com/AstrBotDevs/AstrBot/zip/db4ce0c4b0ae94f443c641f0f78cc9228ddabbeb",
+      "repository": "AstrBotDevs/AstrBot",
+      "commit": "db4ce0c4b0ae94f443c641f0f78cc9228ddabbeb",
+      "target": "astrbot",
+      "strip_root": true,
+      "tree_sha256": "7a604080aa4a266f74a2c36f1bac4b79a3f2bf5679f4fd766d4388fc7ce5c747",
+      "kind": "source"
+    },
+    {
+      "name": "PhoneMCP-main.zip",
+      "url": "https://codeload.github.com/kengerlwl/phoneMcp/zip/2f41018f1568001c2117704be246a02b6716bb4a",
+      "repository": "kengerlwl/phoneMcp",
+      "commit": "2f41018f1568001c2117704be246a02b6716bb4a",
+      "target": "phone/src",
+      "strip_root": true,
+      "tree_sha256": "a50bf8c34c636238fc3365e18542399144f1052a0d8d209bdb225885e6a61d51",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_livingmemory.zip",
+      "url": "https://codeload.github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory/zip/b8aaaec2c1232ec2c86fce22cec066a0069018e0",
+      "repository": "lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory",
+      "commit": "b8aaaec2c1232ec2c86fce22cec066a0069018e0",
+      "target": "astrbot/data/plugins/astrbot_plugin_livingmemory",
+      "strip_root": true,
+      "tree_sha256": "6092c2ab14049ec5fe9d8f724f51be8486ba826cfb79b596be826a795a958ad1",
+      "kind": "source"
+    },
+    {
+      "name": "proactive-main-pinned.zip",
+      "url": "https://codeload.github.com/Pancakes-Labs/astrbot_plugin_proactive_chat/zip/77a1d408ccd003a9d34ad4f51acfb8fc17bc35f5",
+      "repository": "Pancakes-Labs/astrbot_plugin_proactive_chat",
+      "commit": "77a1d408ccd003a9d34ad4f51acfb8fc17bc35f5",
+      "target": "astrbot/data/plugins/astrbot_plugin_proactive_chat",
+      "strip_root": true,
+      "tree_sha256": "08ff5373a48ef9f5a11d6712ee30aa86e368afc6f038c24ef7b723771477f2a6",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_parser.zip",
+      "url": "https://codeload.github.com/Zhalslar/astrbot_plugin_parser/zip/3a954a92b2d85914e894a5ef59a4c191805df3c0",
+      "repository": "Zhalslar/astrbot_plugin_parser",
+      "commit": "3a954a92b2d85914e894a5ef59a4c191805df3c0",
+      "target": "astrbot/data/plugins/astrbot_plugin_parser",
+      "strip_root": true,
+      "tree_sha256": "e6642b309406ea7d66bf0068cd654e3fc46590b3d315d78da3a0a55b2dc0c185",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_music.zip",
+      "url": "https://codeload.github.com/Zhalslar/astrbot_plugin_music/zip/d111498a49cbf6d401ff06405baa08d26f1aece3",
+      "repository": "Zhalslar/astrbot_plugin_music",
+      "commit": "d111498a49cbf6d401ff06405baa08d26f1aece3",
+      "target": "astrbot/data/plugins/astrbot_plugin_music",
+      "strip_root": true,
+      "tree_sha256": "b10982c8a5663b9a5d44333a68a223a08d483ee88c650430069e7f0334170c6a",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_pokepro.zip",
+      "url": "https://codeload.github.com/Zhalslar/astrbot_plugin_pokepro/zip/64f1f9f70be44757e0ee29246434545aaf3dcc52",
+      "repository": "Zhalslar/astrbot_plugin_pokepro",
+      "commit": "64f1f9f70be44757e0ee29246434545aaf3dcc52",
+      "target": "astrbot/data/plugins/astrbot_plugin_pokepro",
+      "strip_root": true,
+      "tree_sha256": "fad88ecec3a48ed03037634ab8272ef06ee4f410a9a1e7eeb78abdf51496ea5a",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_stealer.zip",
+      "url": "https://codeload.github.com/nagatoquin33/astrbot_plugin_stealer/zip/2f787036d2387b652aae0a7444837c58260f5104",
+      "repository": "nagatoquin33/astrbot_plugin_stealer",
+      "commit": "2f787036d2387b652aae0a7444837c58260f5104",
+      "target": "astrbot/data/plugins/astrbot_plugin_stealer",
+      "strip_root": true,
+      "tree_sha256": "ec560c4e7fe8888fceec06cb1bcfd198e047803e389cb08f71686474169879db",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_memelite.zip",
+      "url": "https://codeload.github.com/Zhalslar/astrbot_plugin_memelite/zip/f038e9fe3f1edf81dfaa6e3e3839e4e1aee35de3",
+      "repository": "Zhalslar/astrbot_plugin_memelite",
+      "commit": "f038e9fe3f1edf81dfaa6e3e3839e4e1aee35de3",
+      "target": "astrbot/data/plugins/astrbot_plugin_memelite",
+      "strip_root": true,
+      "tree_sha256": "fcdd227c8830c5b36b60ade3fc098c81d577e64d8a942ea0c6f99af3a11a74d6",
+      "kind": "source"
+    },
+    {
+      "name": "astrbot_plugin_omnidraw.zip",
+      "url": "https://codeload.github.com/diaomin66/astrbot_plugin_omnidraw/zip/91a3555b5103baea759b12261ced52fd18d433bd",
+      "repository": "diaomin66/astrbot_plugin_omnidraw",
+      "commit": "91a3555b5103baea759b12261ced52fd18d433bd",
+      "target": "astrbot/data/plugins/astrbot_plugin_omnidraw",
+      "strip_root": true,
+      "tree_sha256": "d172cf45c100d6b3d9da3b665a2952ded1f217cf8f05f353b25039f71bd6cbae",
+      "kind": "source"
+    },
+    {
+      "name": "AstrBot-v4.29.0-dashboard.zip",
+      "url": "https://github.com/AstrBotDevs/AstrBot/releases/download/v4.29.0/AstrBot-v4.29.0-dashboard.zip",
+      "target": "astrbot/data",
+      "strip_root": false,
+      "sha256": "25e1b64d4d5effc404fdf92b70b753874283a7355dca766fc7b32ae7de5699ad",
+      "kind": "binary"
+    },
+    {
+      "name": "NapCat-v4.18.37.zip",
+      "url": "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.37/NapCat.Shell.Windows.Node.zip",
+      "target": "napcat",
+      "strip_root": false,
+      "sha256": "05c79761361321f6af4358aef92f80a7f8e319b6459c260ebf9a159615e96fe4",
+      "kind": "binary"
+    },
+    {
+      "name": "platform-tools_r36.0.2-win.zip",
+      "url": "https://dl.google.com/android/repository/platform-tools_r36.0.2-win.zip",
+      "target": "bin",
+      "strip_root": false,
+      "sha256": "b024d4f319d6ad3004de1ba7b96a5c7c5f3512e8b14126308d598b4ab93dcead",
+      "kind": "binary"
+    },
+    {
+      "name": "ollama-v0.34.1-windows-amd64.zip",
+      "url": "https://github.com/ollama/ollama/releases/download/v0.34.1/ollama-windows-amd64.zip",
+      "target": "bin/ollama",
+      "strip_root": false,
+      "sha256": "428c94622a04764b318ddf13a061898edf69e32ffa896f638ed6015fd3f33288",
+      "kind": "ollama"
+    },
+    {
+      "name": "ffmpeg-n8.1-win64-gpl.zip",
+      "repository": "BtbN/FFmpeg-Builds",
+      "release": "latest",
+      "asset": "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+      "target": "bin",
+      "strip_root": true,
+      "kind": "ffmpeg",
+      "cached_sha256": "b50d4a979653485c865e47b6af5d93c577f37f6934c74067ee56e74e5c6c313b"
+    },
+    {
+      "name": "ADBKeyboard.apk",
+      "url": "https://raw.githubusercontent.com/senzhk/ADBKeyBoard/8dd0b6924e45ac5565f77f13cf8e8eaf47dbb1b0/ADBKeyboard.apk",
+      "sha256": "e698adea5633135a067b038f9a0cf41baa4de09888713a81593fb2b9682cdc59",
+      "target": "downloads",
+      "kind": "apk"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "owner_qq": "",
+  "bot_qq": "",
+  "group_ids": "",
+  "friend_qqs": "",
+  "deepseek_api_key": "",
+  "deepseek_model": "deepseek-flash",
+  "dashscope_api_key": "",
+  "vision_model": "qwen3-vl-plus",
+  "voice_id": "anyuqing_v3.1",
+  "tts_model": "qwen-audio-3.1-tts-flash",
+  "image_api_key": "",
+  "image_api_url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+  "image_model": "doubao-seedream-5-0-flash-260915",
+  "selfie_model": "doubao-seedream-5-0-flash-260915",
+  "proactive_enabled": true,
+  "scheduled_enabled": false,
+  "emulator_index": 1,
+  "emulator_serial": "emulator-5556",
+  "emulator_directory": "",
+  "chrome_path": "",
+  "ollama_path": ""
+}

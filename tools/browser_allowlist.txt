@@ -1,0 +1,21 @@
+# 允许访问的域名，每行一个；*.example.com 会同时匹配主域和所有子域。
+# 删除本文件或清空 = 不限制；新增站点直接加一行。
+# 购物/支付/银行类默认不放行，避免被引导去下单或登录。
+*.bilibili.com
+*.baidu.com
+*.bing.com
+*.zhihu.com
+*.github.com
+*.weibo.com
+*.douban.com
+*.csdn.net
+*.juejin.cn
+*.163.com
+*.sina.com.cn
+*.qq.com
+*.sohu.com
+*.thepaper.cn
+*.xinhuanet.com
+*.people.com.cn
+*.36kr.com
+*.ithome.com
