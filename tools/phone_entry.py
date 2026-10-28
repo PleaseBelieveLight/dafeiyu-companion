@@ -4,9 +4,9 @@ import importlib
 import json
 import os
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT
+
 settings = json.loads((ROOT / "config/settings.json").read_text(encoding="utf-8-sig"))
 serial = settings["emulator_serial"]
 os.environ["ANDROID_SERIAL"] = serial

@@ -3,10 +3,10 @@
 import json
 import runpy
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-module = runpy.run_path(str(ROOT / "tools/asr_relay.py"))
+from workspace import RUNTIME_ROOT as ROOT, TOOLS
+
+module = runpy.run_path(str(TOOLS / "asr_relay.py"))
 
 
 def load_key():

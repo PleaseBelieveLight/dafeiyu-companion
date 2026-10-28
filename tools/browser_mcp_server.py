@@ -25,6 +25,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from workspace import RUNTIME_ROOT
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -52,7 +53,7 @@ CHROME_PATH = os.environ.get(
     "BROWSER_CHROME_PATH", r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 )
 PROFILE_DIR = Path(
-    os.environ.get("BROWSER_PROFILE_DIR", str(HERE.parent / "browser" / "chrome-profile"))
+    os.environ.get("BROWSER_PROFILE_DIR", str(RUNTIME_ROOT / "browser" / "chrome-profile"))
 )
 ALLOWLIST_FILE = HERE / "browser_allowlist.txt"
 

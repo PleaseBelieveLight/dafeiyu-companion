@@ -4,12 +4,11 @@ import json
 import re
 import sqlite3
 import subprocess
-from pathlib import Path
 from fastmcp import FastMCP
 from fastmcp.utilities.types import Image
 import psutil
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS, runtime_env
 mcp = FastMCP("DafeiyuAdmin")
 
 
@@ -82,7 +81,7 @@ def webui_info() -> dict:
     return {
         "astrbot": "http://127.0.0.1:6185",
         "napcat": "http://127.0.0.1:6099",
-        "setup": str(ROOT / "配置向导.cmd"),
+        "setup": str(SOURCE_ROOT / "配置向导.cmd"),
     }
 
 
@@ -103,9 +102,11 @@ def restart(confirm: str) -> str:
     subprocess.Popen(
         [
             str(ROOT / "runtime/astrbot/Scripts/pythonw.exe"),
-            str(ROOT / "tools/control.py"),
+            str(TOOLS / "control.py"),
             "restart",
-        ]
+        ],
+        env=runtime_env(),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return "Restart requested"
 
@@ -116,10 +117,11 @@ def heal_ws(confirm: str) -> str:
     if confirm != "HEAL":
         return "Confirmation required: HEAL"
     result = subprocess.run(
-        [str(ROOT / "runtime/astrbot/Scripts/python.exe"), str(ROOT / "tools/control.py"), "heal"],
+        [str(ROOT / "runtime/astrbot/Scripts/python.exe"), str(TOOLS / "control.py"), "heal"],
         capture_output=True,
         text=True,
         timeout=30,
+        env=runtime_env(),
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return result.stdout.strip()

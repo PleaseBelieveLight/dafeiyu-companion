@@ -1,14 +1,12 @@
 """Run the installed reply, media, configuration-page and dependency checks."""
 
-import os
 import subprocess
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, runtime_env
 
 
 def main():
-    env = dict(os.environ, ASTRBOT_ROOT=str(ROOT / "astrbot"), PYTHONUTF8="1")
+    env = dict(runtime_env(), ASTRBOT_ROOT=str(ROOT / "astrbot"))
     python = ROOT / "runtime/astrbot/Scripts/python.exe"
     if not python.is_file():
         raise RuntimeError("Run 安装.cmd first")

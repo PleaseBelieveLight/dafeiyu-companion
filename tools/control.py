@@ -1,6 +1,7 @@
 """Start, stop, inspect and back up only this Dafeiyu installation."""
 
 import datetime
+from contextlib import redirect_stdout, redirect_stderr
 import hashlib
 import json
 import os
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import psutil
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, TOOLS, runtime_env
 RUN = ROOT / "run"
 LOG = ROOT / "logs"
 ASTROPY = ROOT / "runtime/astrbot/Scripts/python.exe"
@@ -138,7 +139,7 @@ def supervise():
     RUN.mkdir(exist_ok=True)
     LOG.mkdir(exist_ok=True)
     settings = load(ROOT / "config/settings.json")
-    env = dict(os.environ)
+    env = runtime_env()
     env.update(
         {
             "PYTHONUTF8": "1",
@@ -180,9 +181,9 @@ def supervise():
         env["NAPCAT_QUICK_ACCOUNT"] = settings["bot_qq"].strip()
     services = {
         "ollama": ([settings.get("ollama_path") or OLLAMA, "serve"], ROOT),
-        "phone": ([TOOLPY, ROOT / "tools/phone_entry.py"], ROOT / "phone/src"),
-        "browser": ([TOOLPY, ROOT / "tools/browser_mcp_server.py"], ROOT / "browser"),
-        "asr": ([ASTROPY, ROOT / "tools/local_asr.py"], ROOT),
+        "phone": ([TOOLPY, TOOLS / "phone_entry.py"], ROOT / "phone/src"),
+        "browser": ([TOOLPY, TOOLS / "browser_mcp_server.py"], ROOT / "browser"),
+        "asr": ([ASTROPY, TOOLS / "local_asr.py"], ROOT),
         "astrbot": (
             [ASTROPY, ROOT / "astrbot/main.py", "--webui-dir", ROOT / "astrbot/data/dist"],
             ROOT / "astrbot",
@@ -217,7 +218,7 @@ def supervise():
                     time.sleep(2)
             if not initialized and 6185 in ports():
                 state["initialize-api"] = spawn(
-                    "initialize-api", [ASTROPY, ROOT / "tools/initialize_api.py"], ROOT, env
+                    "initialize-api", [ASTROPY, TOOLS / "initialize_api.py"], ROOT, env
                 )
                 store(RUN / "services.json", state)
                 initialized = True
@@ -238,6 +239,8 @@ def supervise():
 
 
 def start():
+    RUN.mkdir(parents=True, exist_ok=True)
+    LOG.mkdir(parents=True, exist_ok=True)
     if process_alive(load(RUN / "supervisor.json", {})):
         print("Dafeiyu services are already running.")
         return
@@ -259,12 +262,14 @@ def start():
     if conflicts:
         raise RuntimeError("Ports are used by another installation: " + str(sorted(conflicts)))
     (RUN / "stop").unlink(missing_ok=True)
-    spawn(
-        "supervisor",
-        [ASTROPY, Path(__file__), "supervise"],
-        ROOT,
-        dict(os.environ, PYTHONUTF8="1", PYTHONUNBUFFERED="1"),
-    )
+    command = [ASTROPY, Path(__file__), "supervise"]
+    environment = dict(runtime_env(), PYTHONUNBUFFERED="1")
+    if os.name == "nt":
+        from windows_background import launch_background
+
+        launch_background(command, ROOT, environment)
+    else:
+        spawn("supervisor", command, ROOT, environment)
     print("Services are starting. Open http://127.0.0.1:6185 in about 30 seconds.")
 
 
@@ -295,7 +300,10 @@ def detach_supervisor():
     proc = psutil.Process(info["pid"])
     command = proc.cmdline()
     if (
-        not any(Path(arg).resolve() == Path(__file__).resolve() for arg in command)
+        not any(
+            Path(arg).resolve() in {Path(__file__).resolve(), ROOT / "tools/control.py"}
+            for arg in command
+        )
         or "supervise" not in command
     ):
         raise RuntimeError("Refusing to detach a process that is not this installation supervisor.")
@@ -367,7 +375,10 @@ def backup():
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     if action == "supervise":
-        supervise()
+        LOG.mkdir(parents=True, exist_ok=True)
+        with (LOG / "supervisor.log").open("a", encoding="utf-8", buffering=1) as log:
+            with redirect_stdout(log), redirect_stderr(log):
+                supervise()
     elif action == "start":
         start()
     elif action == "stop":

@@ -1,9 +1,10 @@
 @echo off
+chcp 65001 >nul
 set PYTHONUTF8=1
 cd /d "%~dp0"
-if not exist "%~dp0runtime\astrbot\Scripts\python.exe" (
-  echo Run the installer first.
-  pause
-  exit /b 1
+py -3.12 --version >nul 2>&1
+if errorlevel 1 (
+  python "%~dp0tools\launch.py" open-napcat %*
+) else (
+  py -3.12 "%~dp0tools\launch.py" open-napcat %*
 )
-start "" "%~dp0runtime\astrbot\Scripts\pythonw.exe" "%~dp0tools\control.py" open-napcat

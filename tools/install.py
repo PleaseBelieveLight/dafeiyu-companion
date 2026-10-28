@@ -14,9 +14,9 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
+from workspace import RUNTIME_ROOT, SOURCE_ROOT, TOOLS, runtime_env
 
-SOURCE = Path(__file__).resolve().parents[1]
-PUBLIC_DIRS = ("tools", "content", "assets", "plugins", "overlays", "requirements", "tests")
+SOURCE = SOURCE_ROOT
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -159,9 +159,16 @@ def apply_overlays(target: Path) -> None:
     for folder in ["astrbot", "phone"]:
         overlay = SOURCE / "overlays" / folder
         if overlay.exists():
-            shutil.copytree(overlay, target / folder, dirs_exist_ok=True)
+            shutil.copytree(
+                overlay, target / folder, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
     for plugin in (SOURCE / "plugins").iterdir():
-        shutil.copytree(plugin, target / "astrbot/data/plugins" / plugin.name, dirs_exist_ok=True)
+        if plugin.is_dir() and plugin.name != "__pycache__":
+            shutil.copytree(
+                plugin, target / "astrbot/data/plugins" / plugin.name, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
     from patch_selfie_context import apply_selfie_context
 
     apply_selfie_context(target)
@@ -306,9 +313,10 @@ def install(args) -> None:
     if os.name != "nt" or sys.version_info[:2] != (3, 12):
         raise RuntimeError("Use Windows x64 with Python 3.12")
     target = args.root.resolve()
+    if target == SOURCE or SOURCE in target.parents or target in SOURCE.parents:
+        raise RuntimeError("Keep the runtime directory separate from the source repository")
     if (
-        target != SOURCE
-        and target.exists()
+        target.exists()
         and any(target.iterdir())
         and not (target / "run/install-state.json").exists()
     ):
@@ -319,20 +327,6 @@ def install(args) -> None:
             raise RuntimeError("Stop this installation before reinstalling it")
     target.mkdir(parents=True, exist_ok=True)
     (target / "downloads").mkdir(exist_ok=True)
-    if target != SOURCE:
-        for folder in PUBLIC_DIRS:
-            shutil.copytree(
-                SOURCE / folder,
-                target / folder,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-            )
-        for path in [SOURCE / "dependencies.lock.json", SOURCE / "LICENSE", *SOURCE.glob("*.cmd")]:
-            shutil.copy2(path, target / path.name)
-        (target / "config").mkdir(exist_ok=True)
-        shutil.copy2(
-            SOURCE / "config/settings.example.json", target / "config/settings.example.json"
-        )
     lock = read_json(SOURCE / "dependencies.lock.json")
     ollama = find_program("ollama.exe")
     for artifact in lock["artifacts"]:
@@ -395,9 +389,9 @@ def install(args) -> None:
         )
         return
     install_environments(target)
-    env = dict(os.environ, ASTRBOT_ROOT=str(target / "astrbot"), PYTHONUTF8="1")
+    env = dict(runtime_env(target), ASTRBOT_ROOT=str(target / "astrbot"))
     subprocess.run(
-        [str(target / "runtime/astrbot/Scripts/python.exe"), str(target / "tools/apply_config.py")],
+        [str(target / "runtime/astrbot/Scripts/python.exe"), str(TOOLS / "apply_config.py")],
         cwd=target,
         env=env,
         check=True,
@@ -420,7 +414,7 @@ def install(args) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=SOURCE)
+    parser.add_argument("--root", type=Path, default=RUNTIME_ROOT)
     parser.add_argument("--cache", type=Path, action="append", default=[])
     parser.add_argument(
         "--stage-only",

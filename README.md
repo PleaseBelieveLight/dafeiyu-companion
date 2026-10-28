@@ -1,8 +1,26 @@
-# 大肥鱼 QQ 机器人 · Windows 分享版
+# 大肥鱼 QQ 机器人 · Windows 本地项目
 
 基于 [whyever77/dafeiyu-astrbot](https://github.com/whyever77/dafeiyu-astrbot) 整理的 Windows 本地部署项目，包含已验证的配置向导、语音回复、动作配图和网页配置修复。
 
 仓库提供代码与安装器。Python 环境、AstrBot、NapCat、模型和运行数据在安装时生成，不放进 Git。**每位使用者自行填写 QQ、API Key 并扫码登录；不会继承原部署者的密钥、好友资料或聊天记录。**
+
+## 工作目录与本地数据
+
+三个目录职责固定：
+
+| 目录 | 用途 |
+| --- | --- |
+| `D:\dafeiyu-companion` | 私有开发项目；修改、测试和 Git 提交均在这里进行 |
+| `D:\Dafeiyu` | 本地运行与数据目录；存放依赖、模型、配置、登录状态、聊天记录和缓存 |
+| `D:\dafeiyu-astrbot-main` | 外部最新上游源码，仅用于对照，不是运行依赖 |
+
+所有日常 `.cmd` 入口都从 **`dafeiyu-companion`** 使用。管理脚本、人格文档和语音中转源码直接从本项目读取；`plugins/` 和 `overlays/` 的修改通过 **`部署更新.cmd`** 同步到运行目录，不重新下载依赖。运行目录原有按钮保留为跳转入口。
+
+项目完全不读取 `Dafeiyu/source/dafeiyu-astrbot-main`。迁移旧安装可运行 `python tools/launch.py deploy --prune-legacy-source`：先备份代码和配置，再移开旧源码、验证并重启相关服务，成功后清理旧副本。QQ 登录进程保留，配置或验证失败会恢复原来的代码。
+
+**`Dafeiyu` 不可整体当作临时缓存删除**：其中 `config/`、`astrbot/data/`、NapCat 登录资料和备份包含需要保留的本地数据。个人配置和运行数据不会进入私有项目的 Git。
+
+默认运行目录是项目旁的 `Dafeiyu/`，不依赖启动时的当前目录。需要其他位置时，先设置 `$env:DAFEIYU_RUNTIME_ROOT = 'E:\Dafeiyu'`；安装器 `--root` 应使用相同位置。
 
 ## 功能
 
@@ -33,7 +51,7 @@
 
 适用 **Windows 10/11 x64 + Python 3.12 x64**。Python 安装时勾选 pip 和 Tcl/Tk；可从 [Python 官方下载页](https://www.python.org/downloads/windows/) 获取。建议预留 15–20 GB 磁盘空间，首次安装需要联网。
 
-1. 将仓库克隆或解压到本地目录，例如 `D:\Dafeiyu-OpenSource`。
+1. 将仓库克隆或解压到本地目录，例如 `D:\dafeiyu-companion`。
 2. 双击 **`安装.cmd`**。安装器校验并下载依赖，创建两个独立虚拟环境，准备 bge-m3。不会启动 QQ 或发送消息。
 3. 双击 **`配置向导.cmd`**，填写下方必填项，点击“保存配置并启动”。
 4. 双击 **`打开NapCat.cmd`**，用手机 QQ 扫描机器人账号的二维码并确认。QQ 风险验证必须在手机官方 QQ 中由账号本人完成。
@@ -50,7 +68,7 @@
 - **生图 API Key / 完整接口 URL / 模型**：默认是方舟 Seedream 图片接口；视频要在万象画卷里另配视频 Provider。账户额度不足的 HTTP 429 需要到服务商控制台处理。
 - **其他允许的好友 QQ / 允许的群号**：多个号码使用英文逗号分隔。普通使用者无需获得管理员权限，也不需要单独配置 Key；请求共用部署者的服务账户。
 
-`config/settings.example.json` 是空密钥模板；实际 `config/settings.json` 和 `config/local-access.json` 由安装器生成并被 Git 忽略。面板账号、密码在配置向导“管理入口”查看。
+项目中的 `config/settings.example.json` 是空密钥模板；实际 `Dafeiyu/config/settings.json` 和 `Dafeiyu/config/local-access.json` 保存在运行目录。面板账号、密码在配置向导“管理入口”查看。
 
 ### 启动和端口
 
@@ -72,7 +90,7 @@
 
 手机功能需要自己安装模拟器并创建专用实例，在配置中填写 `emulator_directory`、`emulator_index`、`emulator_serial`。默认索引 1 / `emulator-5556` 仅为示例；必须与实际专用实例一致。可在安装目录 `bin/platform-tools/adb.exe devices` 查看序列号。
 
-运行 `runtime/astrbot/Scripts/python.exe tools/setup_phone.py` 可将下载并校验过的 ADBKeyboard 安装到配置中的专用设备。B 站等应用请在模拟器中从官方渠道安装。PhoneMCP 只允许操作这个序列号。系统声音转写使用 Windows 默认输出设备的 loopback，播放时需要音频设备可用。
+运行 `..\Dafeiyu\runtime\astrbot\Scripts\python.exe tools/setup_phone.py` 可将下载并校验过的 ADBKeyboard 安装到配置中的专用设备。B 站等应用请在模拟器中从官方渠道安装。PhoneMCP 只允许操作这个序列号。系统声音转写使用 Windows 默认输出设备的 loopback，播放时需要音频设备可用。
 
 ## 源码与依赖
 
@@ -96,7 +114,7 @@ py -3.12 tools/check_release.py
 完整安装后：
 
 ```powershell
-runtime\astrbot\Scripts\python.exe tools\verify_install.py
+python tools/launch.py verify
 ```
 
 检查通过后才能将**本目录**加入自己的 GitHub 仓库。运行时目录、数据库、登录缓存、截图、API Key、备份都在 `.gitignore` 中。不要强制添加被忽略的文件。

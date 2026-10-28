@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from install import download_model, find_program, read_json
+from workspace import RUNTIME_ROOT as ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 
 
 if __name__ == "__main__":

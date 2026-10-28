@@ -4,10 +4,10 @@ import json
 import msvcrt
 import sys
 import time
-from pathlib import Path
 import httpx
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT
+
 lock = (ROOT / "run/api-setup.lock").open("a+b")
 if lock.tell() == 0:
     lock.write(b"0")
@@ -18,7 +18,7 @@ try:
 except OSError:
     print("API setup is already running", flush=True)
     sys.exit(0)
-SOURCE = ROOT / "content"
+SOURCE = SOURCE_ROOT / "content"
 settings = json.loads((ROOT / "config/settings.json").read_text(encoding="utf-8-sig"))
 credentials = json.loads((ROOT / "config/local-access.json").read_text(encoding="utf-8-sig"))
 client = httpx.Client(base_url="http://127.0.0.1:6185/api/v1", timeout=180, trust_env=False)

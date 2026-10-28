@@ -5,12 +5,12 @@ import json
 import os
 import secrets
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
+
 ASTRO = ROOT / "astrbot"
 DATA = ASTRO / "data"
-SOURCE = ROOT / "content"
+SOURCE = SOURCE_ROOT / "content"
 SETTINGS = ROOT / "config/settings.json"
 
 
@@ -378,7 +378,7 @@ def apply():
             ]
             values["router_config"].update({"chain_text2img": "draw", "chain_selfie": "selfie"})
             prompt = "蓝色鲸鱼娘，大肥鱼，蓝色长发，蓝色眼睛，可爱的二次元少女，保持参考图中的角色外貌和服装风格。"
-            ref = str(ROOT / "assets/selfie-reference.png")
+            ref = str(SOURCE_ROOT / "assets/selfie-reference.png")
             values["persona_config"].update(
                 {
                     "active_persona_id": "dafeiyu",
@@ -444,7 +444,8 @@ def apply():
                 },
                 "dafeiyu-admin": {
                     "command": toolpy,
-                    "args": [str(ROOT / "tools/admin_mcp.py")],
+                    "args": [str(TOOLS / "admin_mcp.py")],
+                    "env": {"DAFEIYU_RUNTIME_ROOT": str(ROOT)},
                     "active": True,
                 },
             }

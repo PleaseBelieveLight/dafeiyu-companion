@@ -13,7 +13,8 @@ import webbrowser
 from pathlib import Path
 from tkinter import ttk
 
-ROOT = Path(__file__).resolve().parents[1]
+from workspace import RUNTIME_ROOT as ROOT, TOOLS, runtime_env
+
 COLORS = {
     "background": "#101319",
     "sidebar": "#141820",
@@ -590,10 +591,11 @@ class ConfigurationApp:
         subprocess.Popen(
             [
                 str(self.root / "runtime/astrbot/Scripts/pythonw.exe"),
-                str(self.root / "tools/control.py"),
+                str(TOOLS / "control.py"),
                 action,
             ],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env=runtime_env(self.root),
         )
 
     def _copy_password(self):
@@ -642,13 +644,14 @@ class ConfigurationApp:
                 result = subprocess.run(
                     [
                         str(self.root / "runtime/astrbot/Scripts/python.exe"),
-                        str(self.root / "tools/control.py"),
+                        str(TOOLS / "control.py"),
                         "apply",
                     ],
                     stdout=log,
                     stderr=log,
                     check=False,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    env=runtime_env(self.root),
                 )
             if result.returncode:
                 self.events.put(
