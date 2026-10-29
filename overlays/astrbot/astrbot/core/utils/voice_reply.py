@@ -5,24 +5,19 @@
 
 import json
 import re
+from difflib import SequenceMatcher
+
+
+VOICE_COOLDOWN_SECONDS = 180
 
 VOICE_REPLY_INSTRUCTIONS = (
-    "你负责选择自然的聊天表达方式。最终回复使用以下内部格式，"
-    '严格输出 <fy_reply>{"text":"实际要发送的文字","voice":"实际要说的话"}</fy_reply>，'
-    "两个字段都必须是字符串，可为空；不要附带格式解释、发送动作描述或路由理由。"
-    "需要调用工具时正常调用，完成工具后再用此格式回答。"
-    "普通聊天允许语音时，根据上下文、情绪、时间、用户偏好决定：可以只发文字、"
-    "只发语音，或两者结合，不要每条都发语音，也不要机械地按比例发送。"
-    "简短接话、代码、网址、数字、步骤、需要复制保存的信息通常用文字；"
-    "亲昵问候、安慰、讲小故事、用户明确想听你说话时适合简短语音；"
-    "用户在开会、不方便听、需要安静时优先文字。语音通常控制在一两句。"
-    "text 和 voice 必须承担不同信息：不能把文字再读一遍，不能换个说法重复同一意思。"
-    "例如 voice 安慰‘今天辛苦了，先喘口气，我陪着你’，text 补充一个歌名或链接；"
-    "没有独立补充信息就只保留一种。禁止两段都说同一句问候。"
-    "用户明确要求只发语音时，允许语音的前提下 text 留空；语音关闭时 voice 必须留空，"
-    "把完整有用的信息写入 text，不得自行打开开关。"
-    "系统负责合成和发送 voice，不需要额外语音工具，不要声称无法发语音。"
-    "普通语音合成不能当成已经生成带旋律的歌曲；发送完成前不要宣称已发送成功。"
+    "默认直接回复简短文字，无需JSON。仅在语音获准且用户明确想听、需要安慰/鼓励、"
+    "或重要事情确实适合出声时用语音；普通问候、闲聊、发图不默认配音，不连续发语音。"
+    '语音回复用 <fy_reply>{"voice":"一两句自然口语"}</fy_reply>，系统负责合成。'
+    "通常文字、语音选一种。仅当文字另有可保存的信息（链接、时间地点、名称、步骤）"
+    '时增加 "text" 字段；两者表达不同信息，不复述、换说法重复，也不朗读链接或代码。'
+    "不方便听或语音关闭时只用文字，不自行开语音。需要工具就正常调用；"
+    "语音不是唱歌，未实际完成不声称成功，不解释内部格式。"
 )
 
 SELFIE_MEDIA_INSTRUCTIONS = (
@@ -48,9 +43,8 @@ ACTION_MEDIA_INSTRUCTIONS = (
     "没有可用视频工具时，除非用户明确只接受视频，否则用一张动作图片替代："
     "展示你自己时调用 generate_selfie，action 描述当前人设、舞姿和场景，count=1；"
     "画其他主体时用 generate_image，count=1。静态图片不能冒充动画或视频。"
-    "工具成功生成并实际发送图片后，若本轮允许语音，voice 配一句简短自然的拟声或接话，"
-    "例如‘哒哒哒，转一圈～’，text 可留空，不用再把同一句写出来；"
-    "这是普通说话和拟声，不代表生成了音乐或带旋律的歌。"
+    "图片成功发送后默认只补一句文字；仅用户明确要求配语音时用简短拟声或接话，"
+    "例如‘哒哒哒，转一圈～’，不要同时重复发文字；这不代表生成了音乐或歌曲。"
     "语音关闭时照常发图，必要时只补一句文字，不得自行打开语音。"
     "只有讨论跳舞、描述别人正在跳舞、分析图片视频时，不要因此调用生图工具。"
     "普通闲聊也不需要每次配图。这类动作回应默认最多生成一张。"
@@ -77,8 +71,10 @@ def parse_voice_reply(raw: str) -> dict[str, str] | None:
     body = cleaned.removeprefix("<fy_reply>").removesuffix("</fy_reply>").strip()
     try:
         value = json.loads(body)
-        if not isinstance(value, dict) or not all(
-            isinstance(value.get(key), str) for key in ("text", "voice")
+        if (
+            not isinstance(value, dict)
+            or not any(key in value for key in ("text", "voice"))
+            or not all(isinstance(value.get(key, ""), str) for key in ("text", "voice"))
         ):
             raise ValueError("Invalid reply channel types")
     except (ValueError, TypeError):
@@ -95,8 +91,128 @@ def parse_voice_reply(raw: str) -> dict[str, str] | None:
                     pass
         if not any(value.values()):
             value["text"] = "这句话我没组织好，你再说一次好吗？"
-    text, voice = (value[key].strip() for key in ("text", "voice"))
-    normalized = [re.sub(r"[\W_]", "", part).casefold() for part in (text, voice)]
-    if all(normalized) and normalized[0] == normalized[1]:
-        text = ""
-    return {"text": text, "voice": voice}
+    return compact_voice_reply({key: value.get(key, "").strip() for key in ("text", "voice")})
+
+
+def voice_preference(message: str, dialogue=()) -> str:
+    """Respect listening conditions and explicit requests without another model call."""
+
+    def preference(text):
+        text = text.replace("取消静音", "可以听了")
+        if re.search(
+            r"不(?:要|用|需要|想听)语音|别(?:发|用|再发)语音|只(?:发|用|要)文字|文字(?:就好|回复)|用文字(?:说|回复|解释)|静音",
+            text,
+        ):
+            return "quiet"
+        if re.search(r"^(?:怎么|如何).{0,10}(?:发|用).{0,8}语音", text):
+            return ""
+        if re.search(
+            r"用语音(?:说|讲|告诉|回复|回答|解释|聊|读|鼓励|安慰|给我|[，。！!？?\s]|$)"
+            r"|发.{0,4}语音|语音(?:说|回复|聊天|聊聊|聊|沟通)(?:给我|一下|吧|呀|嘛|好吗|可以吗|[，。！!？?\s]|$)"
+            r"|想听.{0,6}(?:声音|说话)|说给我听|读给我听",
+            text,
+        ):
+            return "voice"
+        if re.search(r"开完会|会议结束|可以听了|现在方便听|取消静音|结束语音", text):
+            return "normal"
+        if re.search(r"开会|不方便听|不能放声音|需要安静", text):
+            return "quiet"
+        return ""
+
+    current = preference(str(message or ""))
+    if current:
+        return current
+    for item in reversed(list(dialogue)[-8:]):
+        if item.get("role") != "user":
+            continue
+        text = item.get("content", "")
+        mode = preference(text)
+        if mode in {"quiet", "normal"}:
+            return mode
+        if mode == "voice" and re.search(r"接下来|之后|以后|一直|都用|继续|语音聊|语音沟通", text):
+            return mode
+    return "normal"
+
+
+def voice_cooling_down(last_sent: float | None, now: float, message: str, mode: str) -> bool:
+    if mode == "voice" or re.search(r"紧急|危险|救命|撑不住|很重要|重要的事", str(message or "")):
+        return False
+    return last_sent is not None and 0 <= now - last_sent < VOICE_COOLDOWN_SECONDS
+
+
+def _written_detail(text: str) -> bool:
+    return bool(
+        re.search(
+            r"https?://|```|\d|《[^》]+》|(?:歌名|书名|网址|链接|地址|时间|地点|步骤|清单|文件|命令|编号)[：:]?",
+            text,
+        )
+    )
+
+
+def _similar(left: str, right: str) -> bool:
+    left, right = (re.sub(r"[\W_]", "", part).casefold()[:1200] for part in (left, right))
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) < 6:
+        return False
+    # An extended sentence may add an important detail; never discard it wholesale.
+    if shorter in longer:
+        return False
+    return SequenceMatcher(None, left, right, autojunk=False).ratio() >= 0.76
+
+
+def _clauses(text: str) -> list[str]:
+    # Leave copyable multi-line material intact.
+    if "```" in text or re.search(r"https?://", text):
+        return [text]
+    return [part.strip() for part in re.findall(r"[^。！？!?\n]+[。！？!?]?", text) if part.strip()]
+
+
+def merge_reply_text(text: str, voice: str) -> str:
+    if not text:
+        return voice
+    if not voice or _similar(text, voice):
+        return text
+    extra = [
+        part for part in _clauses(voice) if not any(_similar(part, old) for old in _clauses(text))
+    ]
+    return "\n".join([text, *extra])
+
+
+def compact_voice_reply(plan: dict[str, str]) -> dict[str, str]:
+    """Keep one channel unless written references and speech serve separate purposes."""
+    text, voice = (plan.get(key, "").strip() for key in ("text", "voice"))
+    if re.search(r"https?://|```", voice):
+        return {"text": merge_reply_text(text, voice), "voice": ""}
+    if not text or not voice:
+        return {"text": text, "voice": voice}
+    if not _written_detail(text):
+        if _similar(text, voice):
+            return {"text": "", "voice": voice}
+        return {"text": merge_reply_text(text, voice), "voice": ""}
+    text_parts, voice_sentences = _clauses(text), _clauses(voice)
+    voice_parts = [
+        part for part in re.findall(r"[^，,。！？!?\n]+[，,。！？!?]?", voice) if part.strip()
+    ]
+    written_parts = [
+        part for part in re.findall(r"[^，,。！？!?\n]+[，,。！？!?]?", text) if part.strip()
+    ]
+    kept_text = [
+        part
+        for part in text_parts
+        if _written_detail(part) or not any(_similar(part, spoken) for spoken in voice_sentences)
+    ]
+    kept_voice = [
+        part
+        for part in voice_parts
+        if not any(
+            _written_detail(written) and _similar(part, written) for written in written_parts
+        )
+    ]
+    return {
+        "text": "\n".join(kept_text),
+        "voice": voice if len(kept_voice) == len(voice_parts) else "".join(kept_voice).strip(),
+    }

@@ -104,7 +104,7 @@ class ActionExecutionTests(unittest.IsolatedAsyncioTestCase):
         memory.start()
         self.addCleanup(memory.stop)
 
-    async def test_action_sends_one_real_image_chain_then_voice_or_text(self):
+    async def test_action_sends_one_real_image_chain_with_text_by_default(self):
         for enabled in (True, False):
             with self.subTest(voice=enabled):
                 values, omni, manager, request = action_fixture(enabled)
@@ -156,12 +156,12 @@ class ActionExecutionTests(unittest.IsolatedAsyncioTestCase):
                     for comp in call.args[0].chain
                 ]
                 self.assertEqual(sum(isinstance(c, Image) for c in sent), 1)
-                self.assertEqual(sum(isinstance(c, Record) for c in sent), int(enabled))
+                self.assertEqual(sum(isinstance(c, Record) for c in sent), 0)
                 self.assertEqual(
                     [c.text for c in sent if isinstance(c, Plain)],
-                    [] if enabled else ["给你一个舞姿～"],
+                    ["给你一个舞姿～"],
                 )
-                self.assertEqual(provider.get_audio.await_count, int(enabled))
+                provider.get_audio.assert_not_awaited()
                 self.assertEqual(omni._complete_image_quota.call_args.args[2], 1)
 
     async def test_api_failure_or_native_permission_denial_is_not_success(self):

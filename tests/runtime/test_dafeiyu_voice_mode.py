@@ -162,8 +162,8 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
                 True,
                 "午饭记得吃。",
                 False,
-                [],
                 ["午饭记得吃。"],
+                [],
             ),
             (
                 "proactive_disabled",

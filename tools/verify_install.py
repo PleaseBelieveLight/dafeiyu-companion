@@ -21,6 +21,7 @@ def main():
             "unittest",
             "tests.test_dafeiyu_reply_delivery",
             "tests.test_dafeiyu_voice_mode",
+            "tests.test_dafeiyu_voice_policy",
             "tests.test_dafeiyu_action_media",
             "tests.test_dafeiyu_action_execution",
             "tests.test_dafeiyu_selfie_context",

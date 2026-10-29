@@ -270,8 +270,8 @@ def apply():
         {
             "enable": True,
             "provider_id": "dashscope_tts" if dash_key and settings["voice_id"] else "edge_tts",
-            "dual_output": True,
-            "trigger_probability": 0.35,
+            "dual_output": False,
+            "trigger_probability": 0.0,
         }
     )
     config["agent_runner"]["config"]["model"]["provider_id"] = "deepseek_chat"

@@ -42,7 +42,12 @@ from astrbot.core.utils.voice_reply import (
     ACTION_MEDIA_INSTRUCTIONS,
     SELFIE_MEDIA_INSTRUCTIONS,
     VOICE_REPLY_INSTRUCTIONS,
+    VOICE_COOLDOWN_SECONDS,
+    compact_voice_reply,
+    merge_reply_text,
     parse_voice_reply,
+    voice_cooling_down,
+    voice_preference,
 )
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -875,15 +880,26 @@ class FaceConvertPlugin(Star):
         )
         event.set_extra("_fy_voice_plan", None)
         event.set_extra("_fy_voice_handled", False)
+        mode = voice_preference(
+            "" if proactive else event.get_message_str(), recent_selfie_dialogue(req)
+        )
+        event.set_extra("_fy_voice_mode", mode)
+        last_voice = getattr(self, "_last_voice_at", {}).get(event.unified_msg_origin)
+        cooling = voice_cooling_down(last_voice, time.monotonic(), event.get_message_str(), mode)
         if enabled and proactive:
             state = (
-                "你正在主动联系对方，主动消息独立允许语音，不受普通聊天开关限制。"
-                "voice 必须填写一句简短自然的主动问候；text 仅补充独立信息，通常留空。"
+                "主动消息独立允许语音，但默认文字，仅必要时出声。"
             )
         elif enabled:
-            state = "普通聊天自动语音已允许，由你根据上下文选择，不必每次发语音。"
+            state = "普通聊天自动语音已允许，默认文字，根据上下文选择必要的语音。"
         else:
             state = "本次不允许语音，voice 必须留空；需要表达的话写在 text，图片工具仍可按需使用。"
+        if enabled and mode == "quiet":
+            state += "对方现在不方便听或要求文字，本轮只用文字。"
+        elif enabled and mode == "voice":
+            state += "对方明确希望语音沟通，优先只发语音；需复制的信息才另外留文字。"
+        elif enabled and cooling:
+            state += "刚发过语音，本轮优先文字，确有紧急重要情况再出声。"
         tools = getattr(req, "func_tool", None)
         media_star = self.context.get_registered_star("astrbot_plugin_omnidraw")
         media_config = (
@@ -956,7 +972,11 @@ class FaceConvertPlugin(Star):
         marker = "【当前会话语音状态】"
         block = (
             marker
-            + VOICE_REPLY_INSTRUCTIONS
+            + (
+                VOICE_REPLY_INSTRUCTIONS
+                if enabled and mode != "quiet"
+                else "直接回复文字，无需JSON，不发语音；需要工具时正常调用。"
+            )
             + ACTION_MEDIA_INSTRUCTIONS
             + SELFIE_MEDIA_INSTRUCTIONS
             + "当前北京时间："
@@ -1136,14 +1156,7 @@ class FaceConvertPlugin(Star):
             result_text = str(result or "")
             if re.search(r"已成功生成并下发了\s*[1-9]\d*\s*张图", result_text):
                 outcome["sent"] = True
-                voice = (
-                    "哒哒哒，转一圈～"
-                    if "舞" in action
-                    else "转一圈～"
-                    if "圈" in action
-                    else "这样摆，好看吗？"
-                )
-                outcome["plan"] = {"text": "", "voice": voice}
+                outcome["plan"] = {"text": outcome["text"], "voice": ""}
                 outcome["note"] = (
                     "本轮工具已确认发送了一张动作图片，不要再次生图，只需简短接话。"
                 )
@@ -1348,6 +1361,7 @@ class FaceConvertPlugin(Star):
         )
         if not isinstance(plan, dict):
             plan = {"text": raw, "voice": ""}
+        plan = compact_voice_reply(plan)
         text, voice = plan["text"], plan["voice"]
         event.set_extra("_fy_voice_handled", True)
         proactive = event.get_extra("fy_proactive") is True
@@ -1368,13 +1382,16 @@ class FaceConvertPlugin(Star):
             else session.get("tts_enabled") is True
         )
         other = [c for c in result.chain if not isinstance(c, Plain)]
-        if proactive and allowed and not voice:
+        mode = event.get_extra("_fy_voice_mode") or voice_preference(event.get_message_str())
+        if allowed and mode == "voice" and text and not voice and not re.search(r"https?://|```", text):
             voice, text = text, ""
-        if not allowed or any(isinstance(c, Record) for c in other):
+        last_voice = getattr(self, "_last_voice_at", {}).get(event.unified_msg_origin)
+        cooling = voice_cooling_down(last_voice, time.monotonic(), event.get_message_str(), mode)
+        if not allowed or mode == "quiet" or cooling or any(isinstance(c, Record) for c in other):
             text = (
                 action_picture["text"]
                 if isinstance(action_picture, dict) and action_picture["sent"]
-                else "\n".join(part for part in (text, voice) if part)
+                else merge_reply_text(text, voice)
             )
             voice = ""
         spoken = re.sub(r"\[[A-Za-z一-鿿]{1,6}\]", "", voice).strip()
@@ -1398,7 +1415,16 @@ class FaceConvertPlugin(Star):
                 logger.warning(
                     "Contextual TTS failed (%s); preserving text.", type(exc).__name__
                 )
-                text = "\n".join(part for part in (text, voice) if part)
+                text = merge_reply_text(text, voice)
+        if audio:
+            recent = getattr(self, "_last_voice_at", {})
+            now = time.monotonic()
+            self._last_voice_at = {
+                key: stamp
+                for key, stamp in recent.items()
+                if now - stamp < VOICE_COOLDOWN_SECONDS
+            }
+            self._last_voice_at[event.unified_msg_origin] = now
         event.set_extra("_fy_voice_delivered", bool(audio))
         result.chain = audio + ([Plain(text)] if text else []) + other
         mode = "mixed" if audio and text else "voice" if audio else "text"
@@ -1530,7 +1556,7 @@ class FaceConvertPlugin(Star):
             event.unified_msg_origin, True
         )
         yield event.plain_result(
-            "自动语音已开启，我会看聊天内容决定要不要出声；发 /语音关 可关闭普通聊天语音。"
+            "必要时可以用语音啦，平时还是文字；想听我说话就直接告诉我。发 /语音关 可关闭。"
         )
 
     @filter.command("语音关")
@@ -1540,7 +1566,7 @@ class FaceConvertPlugin(Star):
             event.unified_msg_origin, False
         )
         yield event.plain_result(
-            "普通聊天语音已关闭，文字照常聊；主动消息仍可自动发语音。"
+            "普通聊天语音已关闭，文字照常聊；主动消息有独立开关，也默认文字。"
         )
 
     @filter.command("语音状态")
@@ -1556,8 +1582,8 @@ class FaceConvertPlugin(Star):
             or {}
         )
         text = (
-            "普通聊天：自动语音已允许，由我根据上下文选择。"
+            "普通聊天：允许必要的语音，平时优先文字。"
             if session.get("tts_enabled") is True
             else "普通聊天：语音已关闭，只发文字。"
-        ) + "主动消息保持独立自动语音。"
+        ) + "主动消息独立允许语音，也优先文字。"
         yield event.plain_result(text)
