@@ -11,7 +11,7 @@ from astrbot.core import logger, sp
 SELFIE_MEMORY_KEY = "fy_sent_selfies"
 SELFIE_REPLY_INSTRUCTIONS = (
     "这张自拍已经成功发给对方，是你自己的虚拟人设自拍，不是对方上传的照片。"
-    "结合之前的聊天和实际成图，自然接一两句话；不先逐项解说画面，"
+    "结合之前的聊天和实际成图自然接话，长短随话题和情绪变化；不先逐项解说画面，"
     "不复述生成进度，不再生图。生成要求只代表创作意图，画面细节以识别结果为准。"
 )
 

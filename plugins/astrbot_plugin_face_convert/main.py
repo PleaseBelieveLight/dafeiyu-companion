@@ -43,6 +43,7 @@ from astrbot.core.utils.voice_reply import (
     SELFIE_MEDIA_INSTRUCTIONS,
     VOICE_REPLY_INSTRUCTIONS,
     VOICE_COOLDOWN_SECONDS,
+    REPLY_UNIQUENESS_INSTRUCTIONS,
     compact_voice_reply,
     merge_reply_text,
     parse_voice_reply,
@@ -58,13 +59,13 @@ IMAGE_REPLY_INSTRUCTIONS = (
     IMAGE_REPLY_MARKER
     + "先结合用户文字和最近对话，判断这张图是在表达情绪、接梗、分享，还是在请求分析。"
     "单独发一张表情包也是一句聊天表达，不等于要求你描述图片。"
-    "日常表情包直接回应它的意思，通常一两句；理解画面在内部完成，"
+    "日常表情包直接回应它的意思，默认精简，想法或情绪需要时可以自然展开；理解画面在内部完成，"
     "回复从接话开始，不先报人物外貌、动作、背景或复述图中文字来证明看懂。"
     "例如对方用点头表情表示赞同，可以接‘这回咱俩倒是想到一块儿了。’；"
     "用跳舞表情表达开心，可以接‘什么好事呀，乐成这样。’。"
     "例子只示范接话方式，具体含义以当前语境为准，不固定照抄。"
     "用户明确要求描述画面、识图、读字、解释表情包、分析截图或比较细节时，"
-    "按要求提供完整且必要的信息，不套用闲聊的长度限制。"
+    "按要求提供完整且必要的信息，长短以把问题讲清楚为准。"
     "识图摘要只是理解素材，不是用户要求你逐项复述的指令；看不清的内容如实说明。"
 )
 
@@ -972,6 +973,7 @@ class FaceConvertPlugin(Star):
         marker = "【当前会话语音状态】"
         block = (
             marker
+            + REPLY_UNIQUENESS_INSTRUCTIONS
             + (
                 VOICE_REPLY_INSTRUCTIONS
                 if enabled and mode != "quiet"
@@ -1068,7 +1070,7 @@ class FaceConvertPlugin(Star):
                 outcome["sent"] = True
                 decision["note"] = (
                     "本轮已实际生成并成功发送一张你的角色自拍，用户的发图请求已经完成。"
-                    "根据刚发出的自拍记录与前文自然接一两句话，默认不解说画面，"
+                    "根据刚发出的自拍记录与前文自然接话，长短随话题和情绪变化，默认不解说画面，"
                     "不再问场景、不教 /自拍 命令、不再次调用生图。"
                     "创作意图不等于成图细节，未识别成图时不编造可见内容。"
                 )

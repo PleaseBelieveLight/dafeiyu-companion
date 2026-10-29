@@ -10,10 +10,15 @@ from difflib import SequenceMatcher
 
 VOICE_COOLDOWN_SECONDS = 180
 
+REPLY_UNIQUENESS_INSTRUCTIONS = (
+    "同一条回复中，一个意思只说一次；表达清楚后自然收住，不在末尾再附一段口语改写或同义总结。"
+    "用户要求复述、总结或对照时按要求处理。"
+)
+
 VOICE_REPLY_INSTRUCTIONS = (
-    "默认直接回复简短文字，无需JSON。仅在语音获准且用户明确想听、需要安慰/鼓励、"
+    "默认直接用自然文字回复，无需JSON，长短随话题和情绪变化。仅在语音获准且用户明确想听、需要安慰/鼓励、"
     "或重要事情确实适合出声时用语音；普通问候、闲聊、发图不默认配音，不连续发语音。"
-    '语音回复用 <fy_reply>{"voice":"一两句自然口语"}</fy_reply>，系统负责合成。'
+    '语音回复用 <fy_reply>{"voice":"自然口语内容"}</fy_reply>，系统负责合成。'
     "通常文字、语音选一种。仅当文字另有可保存的信息（链接、时间地点、名称、步骤）"
     '时增加 "text" 字段；两者表达不同信息，不复述、换说法重复，也不朗读链接或代码。'
     "不方便听或语音关闭时只用文字，不自行开语音。需要工具就正常调用；"
@@ -27,7 +32,7 @@ SELFIE_MEDIA_INSTRUCTIONS = (
     "再按当前北京时间选择自然的角色日常，不默认每次站着微笑。"
     "把上下文中的活动、服装、地点、情绪、光线具体写入 action，默认 count=1。"
     "例如你刚说‘我在睡觉’，对方说‘真的吗？给我看看’，就是想看你睡觉的样子，"
-    "应调用自拍呈现睡衣、床上休息的场景，图发出后顺着接一句；不再次追问或教命令。"
+    "应调用自拍呈现睡衣、床上休息的场景，图发出后顺着聊天自然接话；不再次追问或教命令。"
     "‘你现在在做什么’本身可自然聊角色日常，不必自动发图；随后要看才展示。"
     "回答当前活动时延续已有状态；没有上下文时依时段安排一件日常小事，"
     "不每次都说‘在这里待着’，也不机械复用同一段台词。"
@@ -43,9 +48,9 @@ ACTION_MEDIA_INSTRUCTIONS = (
     "没有可用视频工具时，除非用户明确只接受视频，否则用一张动作图片替代："
     "展示你自己时调用 generate_selfie，action 描述当前人设、舞姿和场景，count=1；"
     "画其他主体时用 generate_image，count=1。静态图片不能冒充动画或视频。"
-    "图片成功发送后默认只补一句文字；仅用户明确要求配语音时用简短拟声或接话，"
+    "图片成功发送后默认用文字自然接话，长短随表达需要变化；仅用户明确要求配语音时用拟声或接话，"
     "例如‘哒哒哒，转一圈～’，不要同时重复发文字；这不代表生成了音乐或歌曲。"
-    "语音关闭时照常发图，必要时只补一句文字，不得自行打开语音。"
+    "语音关闭时照常发图，用文字自然回应，不得自行打开语音。"
     "只有讨论跳舞、描述别人正在跳舞、分析图片视频时，不要因此调用生图工具。"
     "普通闲聊也不需要每次配图。这类动作回应默认最多生成一张。"
     "只使用本轮实际可用的工具，未配置的工具不能调用。"
@@ -176,10 +181,34 @@ def merge_reply_text(text: str, voice: str) -> str:
         return voice
     if not voice or _similar(text, voice):
         return text
+    if not _written_detail(text) and not _written_detail(voice):
+        # These fields are alternative chat answers, not two messages to concatenate.
+        return _single_chat_answer(text, voice)
     extra = [
         part for part in _clauses(voice) if not any(_similar(part, old) for old in _clauses(text))
     ]
     return "\n".join([text, *extra])
+
+
+def _single_chat_answer(text: str, voice: str) -> str:
+    """Keep the primary answer; a bare acknowledgement is not a complete answer."""
+    acknowledgement = re.sub(r"[\W_]", "", text)
+    if acknowledgement in {
+        "好",
+        "好呀",
+        "好啊",
+        "好的",
+        "嗯",
+        "嗯嗯",
+        "行",
+        "可以",
+        "收到",
+        "没问题",
+        "来啦",
+        "喏",
+    }:
+        return voice
+    return text
 
 
 def compact_voice_reply(plan: dict[str, str]) -> dict[str, str]:
@@ -190,9 +219,11 @@ def compact_voice_reply(plan: dict[str, str]) -> dict[str, str]:
     if not text or not voice:
         return {"text": text, "voice": voice}
     if not _written_detail(text):
-        if _similar(text, voice):
+        if _written_detail(voice):
+            return {"text": merge_reply_text(text, voice), "voice": ""}
+        if _single_chat_answer(text, voice) == voice and text != voice:
             return {"text": "", "voice": voice}
-        return {"text": merge_reply_text(text, voice), "voice": ""}
+        return {"text": text, "voice": ""}
     text_parts, voice_sentences = _clauses(text), _clauses(voice)
     voice_parts = [
         part for part in re.findall(r"[^，,。！？!?\n]+[，,。！？!?]?", voice) if part.strip()

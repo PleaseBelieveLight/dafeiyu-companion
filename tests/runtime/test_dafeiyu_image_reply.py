@@ -49,7 +49,7 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
         before = copy.deepcopy(vars(req))
         await self.plugin.inject_image_reply_style(self.event(), req)
         self.assertTrue(req.system_prompt.startswith(before.pop("system_prompt")))
-        self.assertIn("不套用闲聊的长度限制", req.system_prompt)
+        self.assertIn("按要求提供完整且必要的信息", req.system_prompt)
         self.assertEqual(
             {key: value for key, value in vars(req).items() if key != "system_prompt"},
             before,

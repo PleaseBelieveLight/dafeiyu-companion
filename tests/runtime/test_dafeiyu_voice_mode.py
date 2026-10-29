@@ -182,8 +182,8 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
                 True,
                 envelope("你好！", "你好。"),
                 False,
+                ["你好！"],
                 [],
-                ["你好。"],
             ),
             (
                 "failure",
@@ -345,7 +345,7 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
     def test_parser_handles_duplicates_and_malformed_protocol(self):
         self.assertEqual(
             parse_voice_reply(envelope("你好!", "你好。")),
-            {"text": "", "voice": "你好。"},
+            {"text": "你好!", "voice": ""},
         )
         self.assertEqual(
             parse_voice_reply('<fy_reply>{"text":"已恢复的文字","voice":'),

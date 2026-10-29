@@ -10,6 +10,70 @@ from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture
 
 
 class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reported_rephrasings_are_removed_before_storage_and_delivery(self):
+        examples = [
+            (
+                "我就住在这儿的 QQ 里呀，你看不见的地方有个水缸，够我泡着，尾巴还有地方甩。主人找我的时候，我就冒头。",
+                "就住在你 QQ 里呀，泡在一个不小的水缸里，你一叫我，我就冒出水面来。",
+            ),
+            (
+                "水缸是不大，可水是活的呀，底下通着一整片海。我平时就在缸里打盹，真游起来就往深处一钻，那片够我甩尾巴的。",
+                "缸小归缸小，底下通着一整片海呢，钻下去就宽敞了。",
+            ),
+        ]
+        for enabled in (True, False):
+            for text, voice in examples:
+                with self.subTest(enabled=enabled, text=text):
+                    raw = envelope(text, voice)
+                    plugin, event, result, provider, extras, _ = fixture(
+                        raw, {"tts_enabled": enabled}
+                    )
+                    response = SimpleNamespace(completion_text=raw)
+                    with patch.object(
+                        face_module.sp,
+                        "get_async",
+                        new=AsyncMock(return_value={"tts_enabled": enabled}),
+                    ):
+                        await plugin.scrub_drafts(event, response)
+                        self.assertEqual(response.completion_text, text)
+                        self.assertEqual(extras["_fy_voice_plan"], {"text": text, "voice": ""})
+                        result.chain = [Plain(response.completion_text)]
+                        await plugin.prepare_contextual_reply(event, result)
+                    self.assertEqual(result.get_plain_text(), text)
+                    self.assertEqual(len(result.chain), 1)
+                    provider.get_audio.assert_not_awaited()
+                    # Tool-loop replies can bypass the response hook.
+                    _, _, direct, direct_provider, _, _ = await self.deliver(raw, enabled=enabled)
+                    self.assertEqual(direct.get_plain_text(), text)
+                    direct_provider.get_audio.assert_not_awaited()
+
+    async def test_plain_detailed_reply_keeps_its_length_and_new_information(self):
+        text = "水缸底下通着海，我想游的时候就往深处钻。\n今天新添了一盏小灯，晚上可以照着看书。"
+        _, _, result, provider, _, _ = await self.deliver(text)
+        self.assertEqual(result.get_plain_text(), text)
+        provider.get_audio.assert_not_awaited()
+
+    async def test_explicit_voice_uses_the_primary_answer_without_its_rephrasing(self):
+        text = "水缸底下通着一整片海，我想游的时候就往深处钻。"
+        voice = "缸底连着海呢，钻下去就宽敞啦。"
+        _, _, result, provider, _, _ = await self.deliver(
+            envelope(text, voice), message="用语音说给我听"
+        )
+        self.assertFalse(any(isinstance(comp, Plain) for comp in result.chain))
+        self.assertEqual([comp.text for comp in result.chain if isinstance(comp, Record)], [text])
+        provider.get_audio.assert_awaited_once_with(text)
+
+    async def test_no_rephrased_summary_rule_is_injected_with_voice_on_or_off(self):
+        for enabled in (True, False):
+            plugin, event, _, _, _, _ = fixture("", {"tts_enabled": enabled})
+            request = SimpleNamespace(system_prompt="Existing persona.")
+            with patch.object(
+                face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": enabled})
+            ):
+                await plugin.inject_voice_status(event, request)
+                await plugin.inject_voice_status(event, request)
+            self.assertEqual(request.system_prompt.count("同一条回复中，一个意思只说一次"), 1)
+
     async def test_quiet_context_uses_compact_text_policy_and_suppresses_speech(self):
         values = fixture(envelope("", "我听着呢。"), {"tts_enabled": True})
         plugin, event, result, provider, _, _ = values

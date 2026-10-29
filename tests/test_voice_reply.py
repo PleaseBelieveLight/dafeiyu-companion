@@ -1,5 +1,6 @@
 """Keep speech sparse and complementary using local rules, without model calls."""
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +17,41 @@ from voice_reply import (
 
 
 class VoiceReplyTests(unittest.TestCase):
+    def test_chat_answer_is_not_followed_by_its_spoken_rephrasing(self):
+        examples = [
+            (
+                "我就住在这儿的 QQ 里呀，你看不见的地方有个水缸，够我泡着，尾巴还有地方甩。主人找我的时候，我就冒头。",
+                "就住在你 QQ 里呀，泡在一个不小的水缸里，你一叫我，我就冒出水面来。",
+            ),
+            (
+                "水缸是不大，可水是活的呀，底下通着一整片海。我平时就在缸里打盹，真游起来就往深处一钻，那片够我甩尾巴的。",
+                "缸小归缸小，底下通着一整片海呢，钻下去就宽敞了。",
+            ),
+        ]
+        for text, voice in examples:
+            with self.subTest(text=text):
+                plan = {"text": text, "voice": voice}
+                expected = {"text": text, "voice": ""}
+                self.assertEqual(compact_voice_reply(plan), expected)
+                self.assertEqual(merge_reply_text(text, voice), text)
+                raw = "<fy_reply>" + json.dumps(plan, ensure_ascii=False) + "</fy_reply>"
+                self.assertEqual(parse_voice_reply(raw), expected)
+                self.assertEqual(compact_voice_reply(expected), expected)
+
+    def test_acknowledgement_does_not_replace_the_full_answer(self):
+        voice = "我住在 QQ 里的小水缸里，底下通着海。"
+        self.assertEqual(
+            compact_voice_reply({"text": "好呀～", "voice": voice}), {"text": "", "voice": voice}
+        )
+
+    def test_secondary_written_information_is_retained(self):
+        plan = compact_voice_reply(
+            {"text": "我陪你慢慢看。", "voice": "链接：https://example.invalid/docs?x=1"}
+        )
+        self.assertIn("我陪你慢慢看。", plan["text"])
+        self.assertIn("https://example.invalid/docs?x=1", plan["text"])
+        self.assertEqual(plan["voice"], "")
+
     def test_plain_text_needs_no_protocol_and_voice_only_omits_text(self):
         self.assertIsNone(parse_voice_reply("好，明天见。"))
         self.assertEqual(
