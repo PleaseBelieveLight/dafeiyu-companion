@@ -10,7 +10,7 @@
 | LivingMemory           | https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory ，见上游 LICENSE | 安装器获取                                                                               |
 | 主动聊天插件           | https://github.com/Pancakes-Labs/astrbot_plugin_proactive_chat ，见上游 LICENSE           | 兼容与发送补丁，上游源码由安装器获取                                                     |
 | 图片/视频解析          | https://github.com/Zhalslar/astrbot_plugin_parser                                         | 安装器获取                                                                               |
-| 点歌                   | https://github.com/Zhalslar/astrbot_plugin_music                                          | 安装器获取                                                                               |
+| 点歌                   | https://github.com/Zhalslar/astrbot_plugin_music                                          | 安装器获取；本机文件发送、限时回退与缓存补丁，保留上游源码和许可                            |
 | 戳一戳                 | https://github.com/Zhalslar/astrbot_plugin_pokepro                                        | 安装器获取                                                                               |
 | 表情制作               | https://github.com/Zhalslar/astrbot_plugin_memelite                                       | 安装器获取                                                                               |
 | 表情收集               | https://github.com/nagatoquin33/astrbot_plugin_stealer                                    | 安装器获取                                                                               |

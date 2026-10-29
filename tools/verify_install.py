@@ -28,6 +28,7 @@ def main():
             "tests.test_dafeiyu_selfie_reference",
             "tests.test_dafeiyu_selfie_intent",
             "tests.test_dafeiyu_image_reply",
+            "tests.test_dafeiyu_music_delivery",
             "-q",
         ],
         cwd=ROOT / "astrbot",

@@ -171,9 +171,11 @@ def apply_overlays(target: Path) -> None:
             )
     from patch_selfie_context import apply_selfie_context
     from patch_selfie_references import apply_selfie_references
+    from patch_music import apply_music
 
     apply_selfie_context(target)
     apply_selfie_references(target)
+    apply_music(target)
     runtime_tests = target / "astrbot/tests"
     runtime_tests.mkdir(parents=True, exist_ok=True)
     (runtime_tests / "__init__.py").touch()

@@ -62,6 +62,8 @@ def managed_paths() -> list[Path]:
     paths.extend((media_data / "selfie_references").glob("*"))
     paths.append(media_data / "files/persona_config/persona_ref_image/dafeiyu.png")
     paths.extend([
+        ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/sender.py",
+        ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/downloader.py",
         ROOT / "astrbot/data/mcp_server.json",
         ROOT / "astrbot/astrbot/core/provider/func_tool_manager.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/main.py",
