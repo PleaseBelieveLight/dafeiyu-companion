@@ -144,6 +144,46 @@ class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.get_plain_text(), "先别紧张，我在。")
                 provider.get_audio.assert_not_awaited()
 
+    async def test_reported_singing_requests_send_one_audio_even_during_cooldown(self):
+        text = "小鲸鱼摇摇尾，今天也要开心呀。"
+        for message in ("要不你唱两句", "多唱几句，记得发声音", "语音开了，重新唱几句"):
+            for raw in (text, envelope(text, "小鲸鱼摇尾巴，开心呀。"), envelope("", text)):
+                with self.subTest(message=message, raw=raw):
+                    _, _, result, provider, extras, _ = await self.deliver(
+                        raw, message, recent=True
+                    )
+                    self.assertEqual([c.text for c in result.chain if isinstance(c, Record)], [text])
+                    self.assertFalse(any(isinstance(c, Plain) for c in result.chain))
+                    provider.get_audio.assert_awaited_once_with(text)
+                    self.assertTrue(extras["_fy_voice_delivered"])
+
+    async def test_request_response_cleanup_and_delivery_keep_explicit_singing_intent(self):
+        text = "我来用声音示意一下，小鲸鱼摇摇尾。"
+        values = fixture("", {"tts_enabled": True})
+        plugin, event, result, provider, extras, _ = values
+        event.get_message_str.return_value = "语音开了，重新唱几句"
+        plugin._last_voice_at = {event.unified_msg_origin: time.monotonic()}
+        request = SimpleNamespace(system_prompt="Existing persona.", contexts=[])
+        response = SimpleNamespace(completion_text=envelope(text, "小鲸鱼摇尾巴。"))
+        with patch.object(
+            face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": True})
+        ):
+            await plugin.inject_voice_status(event, request)
+            self.assertEqual(extras["_fy_voice_mode"], "voice")
+            await plugin.scrub_drafts(event, response)
+            result.chain = [Plain(response.completion_text)]
+            await plugin.prepare_contextual_reply(event, result)
+        provider.get_audio.assert_awaited_once_with(text)
+        self.assertEqual([c.text for c in result.chain if isinstance(c, Record)], [text])
+
+    async def test_singing_cannot_override_disabled_or_quiet_session(self):
+        for message, enabled in (("重新唱几句", False), ("不要发声音，先别唱了", True)):
+            _, _, result, provider, _, _ = await self.deliver(
+                envelope("", "小鲸鱼摇摇尾。"), message, recent=True, enabled=enabled
+            )
+            provider.get_audio.assert_not_awaited()
+            self.assertEqual(result.get_plain_text(), "小鲸鱼摇摇尾。")
+
     async def test_same_purpose_paraphrases_cannot_produce_two_channels(self):
         _, _, result, _, _, _ = await self.deliver(
             envelope("你已经很努力了，慢慢来。", "加油呀，我相信你可以的。")

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Modified for the Dafeiyu Windows distribution on 2026-10-26.
-# Changes: local compatibility, contextual speech and reliable media delivery.
+# Modified for the Dafeiyu Windows distribution on 2026-10-29.
+# Changes: contextual speech, explicit performance requests and reliable delivery.
 """Decode a chat model's separate written and spoken reply channels."""
 
 import json
@@ -22,7 +22,9 @@ VOICE_REPLY_INSTRUCTIONS = (
     "通常文字、语音选一种。仅当文字另有可保存的信息（链接、时间地点、名称、步骤）"
     '时增加 "text" 字段；两者表达不同信息，不复述、换说法重复，也不朗读链接或代码。'
     "不方便听或语音关闭时只用文字，不自行开语音。需要工具就正常调用；"
-    "语音不是唱歌，未实际完成不声称成功，不解释内部格式。"
+    "‘唱两句’‘哼几句’‘发声音’也是明确的出声请求，获准时使用语音渠道，不只写表演台词。"
+    "仅有普通TTS时可以用语音作朗读或拟声示意，不冒充按歌曲旋律演唱。"
+    "未实际完成不声称成功，不解释内部格式，也不在没有失败记录时猜测语音开关或接口出了问题。"
 )
 
 SELFIE_MEDIA_INSTRUCTIONS = (
@@ -105,7 +107,10 @@ def voice_preference(message: str, dialogue=()) -> str:
     def preference(text):
         text = text.replace("取消静音", "可以听了")
         if re.search(
-            r"不(?:要|用|需要|想听)语音|别(?:发|用|再发)语音|只(?:发|用|要)文字|文字(?:就好|回复)|用文字(?:说|回复|解释)|静音",
+            r"不(?:要|用|需要|想听)(?:再)?(?:发|用)?语音|别(?:发|用|再发)语音"
+            r"|只(?:发|用|要)文字|文字(?:就好|回复)|用文字(?:说|回复|解释)|静音"
+            r"|(?:不要|不用|不想|别|先别)(?:再)?(?:唱|哼|出声|发声音)"
+            r"|不想听.{0,6}(?:唱|哼|声音)|不方便听|不能放声音|需要安静",
             text,
         ):
             return "quiet"
@@ -115,6 +120,22 @@ def voice_preference(message: str, dialogue=()) -> str:
             r"用语音(?:说|讲|告诉|回复|回答|解释|聊|读|鼓励|安慰|给我|[，。！!？?\s]|$)"
             r"|发.{0,4}语音|语音(?:说|回复|聊天|聊聊|聊|沟通)(?:给我|一下|吧|呀|嘛|好吗|可以吗|[，。！!？?\s]|$)"
             r"|想听.{0,6}(?:声音|说话)|说给我听|读给我听",
+            text,
+        ):
+            return "voice"
+        # A request to sing/hum is an audio request even without the word “语音”.
+        # Keep capability questions, implementation discussion and quoted terms textual.
+        technical_or_capability = re.search(
+            r"原理|接口|代码|教程|是什么意思"
+            r"|(?:怎么|如何).{0,10}(?:唱|哼|出声|发声音)|(?:会|能)唱歌[吗么嘛?？]",
+            text,
+        )
+        if not technical_or_capability and re.search(
+            r"(?:唱|哼)(?:[一二两三四五六七八九十几多\d]+)?(?:句|首|段|小曲|一下)"
+            r"|(?:给我|给大家|请|再|重新|继续|想听|要听|能不能|要不你).{0,8}(?:唱歌|哼歌)"
+            r"|^(?:你来|你|来)?(?:唱歌|哼歌)(?:吧|呀|啊|嘛|[。！!？?\s])*$"
+            r"|(?:唱|哼).{0,8}给我听|发(?:出|点|段|个)?声音"
+            r"|出(?:个)?声(?:说|唱|哼|给我听|[。！!呀啊吧\s]|$)",
             text,
         ):
             return "voice"

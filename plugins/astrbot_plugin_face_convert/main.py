@@ -914,7 +914,11 @@ class FaceConvertPlugin(Star):
         if enabled and mode == "quiet":
             state += "对方现在不方便听或要求文字，本轮只用文字。"
         elif enabled and mode == "voice":
-            state += "对方明确希望语音沟通，优先只发语音；需复制的信息才另外留文字。"
+            state += (
+                "对方明确要求出声，本轮优先只发语音，普通闲聊冷却不限制这个请求；"
+                "需复制的信息才另外留文字。语音权限已核实，不要求对方重复开关，"
+                "不猜测开关未开，也不在发送完成前声称已经发出。"
+            )
         elif enabled and cooling:
             state += "刚发过语音，本轮优先文字，确有紧急重要情况再出声。"
         tools = getattr(req, "func_tool", None)
@@ -1412,6 +1416,10 @@ class FaceConvertPlugin(Star):
                 else merge_reply_text(text, voice)
             )
             voice = ""
+        logger.info(
+            "Contextual voice decision: preference=%s, allowed=%s, cooling=%s, selected=%s",
+            mode, allowed, cooling, bool(voice),
+        )
         spoken = re.sub(r"\[[A-Za-z一-鿿]{1,6}\]", "", voice).strip()
         audio = []
         if spoken.strip("…。.，,!！?？~～、 　"):

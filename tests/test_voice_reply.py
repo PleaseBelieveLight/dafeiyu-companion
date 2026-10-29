@@ -126,6 +126,32 @@ class VoiceReplyTests(unittest.TestCase):
         self.assertFalse(voice_cooling_down(100, 101, "有件很重要的事", "normal"))
         self.assertEqual(merge_reply_text("你好！", "你好。"), "你好！")
 
+    def test_singing_humming_and_sound_requests_override_chat_cooldown(self):
+        for message in (
+            "要不你唱两句", "多唱几句，记得发声音", "语音开了，重新唱几句",
+            "给我唱首歌吧", "我想听你哼一下", "唱歌给我听", "发声音呀", "出个声吧",
+        ):
+            with self.subTest(message=message):
+                mode = voice_preference(message)
+                self.assertEqual(mode, "voice")
+                self.assertFalse(voice_cooling_down(0, 150, message, mode))
+
+    def test_performance_discussion_does_not_force_audio(self):
+        for message in (
+            "你会唱歌吗", "你能唱歌吗", "唱歌功能怎么实现", "语音唱歌接口的原理是什么",
+            "唱两句是什么意思", "如何唱两句", "这首歌真好听", "她刚才唱了两句",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "normal")
+
+    def test_declining_speech_still_wins_over_singing_requests(self):
+        for message in (
+            "不用唱了", "别再唱了", "不想听你唱歌", "不要发声音", "先别出声",
+            "我不方便听，你唱两句也先用文字", "不用语音，给我文字歌词",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "quiet")
+
     def test_duplicate_removal_keeps_additional_spoken_details(self):
         text = "时间：明天上午10点见。"
         voice = "时间：明天上午10点见，记得带合同。"
