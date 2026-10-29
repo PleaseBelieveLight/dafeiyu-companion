@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Modified for the Dafeiyu Windows distribution on 2026-10-26.
-# Changes: local compatibility, contextual speech and reliable media delivery.
+# Modified for the Dafeiyu Windows distribution on 2026-10-29.
+# Changes: local compatibility and single-attempt delivery under the life quota.
 """AstrBot 事件适配器：伪事件构造与标准钩子派发。
 
 本模块由旧 core/proactive_event.py 等价搬迁而来，行为保持一致。
@@ -157,6 +157,8 @@ class ProactiveMessageEvent(_EventBase):  # type: ignore[misc, valid-type]
     以便复用 AstrBot 的装饰钩子、发送能力与发送后钩子。
     """
 
+    LIFE_DELIVERY_PROTOCOL = 1
+
     def __init__(
         self,
         *,
@@ -242,6 +244,8 @@ class ProactiveMessageEvent(_EventBase):  # type: ignore[misc, valid-type]
             return False
 
         self.proactive_sent_chains.append(message)
+        if self.get_extra("_life_delivery_guarded", False) is True:
+            return await self._send_life_guarded(message)
 
         sent = False
         platform = self._resolve_platform()
@@ -273,6 +277,33 @@ class ProactiveMessageEvent(_EventBase):  # type: ignore[misc, valid-type]
             logger.error("[主动消息] 事件发送失败喵：平台与核心 API 均未能送达。")
             return False
 
+        self._has_send_oper = True
+        await self._persist_sent_chain(message)
+        return True
+
+    async def _send_life_guarded(self, message: MessageChain) -> bool:
+        """One transport attempt; an unknown result must not trigger another send."""
+        platform = self._resolve_platform()
+        try:
+            if platform is not None and platform.status == PlatformStatus.RUNNING:
+                session = MessageSession(
+                    platform_name=platform.meta().id,
+                    message_type=MessageType.GROUP_MESSAGE if self._proactive_is_group
+                    else MessageType.FRIEND_MESSAGE,
+                    session_id=self._proactive_target_id,
+                )
+                await platform.send_by_session(session, message)
+                sent = True
+            elif platform is None:
+                sent = await self._send_via_core_api(message)
+            else:
+                sent = False
+        except Exception:
+            sent = False
+        if not sent:
+            self.proactive_send_failed = True
+            self.set_extra("_life_delivery_uncertain", True)
+            return False
         self._has_send_oper = True
         await self._persist_sent_chain(message)
         return True

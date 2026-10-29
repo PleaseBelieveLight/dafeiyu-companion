@@ -1,6 +1,6 @@
 {
   "enabled": {
-    "description": "启用自主生活存储和主人私聊接口（当前阶段不启动活动）",
+    "description": "启用自主生活存储与主人私聊接口；活动另有开关",
     "type": "bool",
     "default": false
   },
@@ -13,5 +13,24 @@
     "description": "允许主人显式调用 LivingMemory 桥接；要求记忆按当前会话隔离",
     "type": "bool",
     "default": false
+  },
+  "activity_enabled": {
+    "description": "允许主人手动触发有时限的资料研究（不启用周期）",
+    "type": "bool",
+    "default": false
+  },
+  "share_enabled": {
+    "description": "允许研究后主动分享摘录，与主动聊天共用额度",
+    "type": "bool",
+    "default": false
+  },
+  "daily_minutes": {"description": "每日后台活动分钟上限", "type": "int", "default": 10},
+  "max_run_seconds": {"description": "单轮活动秒数上限；首轮同时受模型超时上限约束", "type": "int", "default": 300},
+  "max_model_calls_per_run": {"description": "单轮模型调用上限", "type": "int", "default": 10},
+  "daily_model_calls": {"description": "每日模型调用上限", "type": "int", "default": 20},
+  "daily_shares": {"description": "每日自主分享与主动聊天总份数上限", "type": "int", "default": 1},
+  "model_timeout_seconds": {"description": "单次模型调用超时秒数", "type": "int", "default": 60},
+  "stop_timeout_seconds": {"description": "等待在途调用停止的秒数", "type": "int", "default": 5},
+  "chat_cooldown_seconds": {"description": "前台聊天后的冷却秒数", "type": "int", "default": 300
   }
 }

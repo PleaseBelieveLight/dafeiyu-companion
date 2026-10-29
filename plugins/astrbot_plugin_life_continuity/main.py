@@ -1,18 +1,22 @@
-"""Scoped chat context and owner feedback; autonomous execution remains disabled."""
+"""Scoped chat and bounded research; all execution remains opt-in and one-shot."""
 
 import copy
 import json
+from datetime import datetime
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .chat import TOOLS, LifeChat, is_owner_event, parse_command, plain_owner_text
+from .activity import ActivityEngine
+from .activity_state import SHANGHAI
+from .delivery import DeliveryGate, quiet_now
 from .memory_bridge import MemoryBridge
-from .state import PLUGIN_NAME, LifeStore
+from .state import PLUGIN_NAME, LifeStore, StateError
 
 
-@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活聊天与经历连通，默认关闭", "0.2.0")
+@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活有界资料研究，默认关闭", "0.3.0")
 class LifeContinuityPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -20,6 +24,8 @@ class LifeContinuityPlugin(Star):
         self.store = None
         self.chat = None
         self._memory = None
+        self.engine = None
+        self.delivery = None
 
     async def initialize(self):
         if self.config.get("enabled") is not True or self.store is not None:
@@ -27,17 +33,86 @@ class LifeContinuityPlugin(Star):
         try:
             self.store = LifeStore(StarTools.get_data_dir(PLUGIN_NAME))
             self.chat = LifeChat(self.store)
-            logger.info("[life_continuity] 聊天存储已就绪；当前阶段没有自主调度。")
+            self.engine = ActivityEngine(
+                self.store, self.context, self.config, self.activity_policy, share=self.share_note,
+            )
+            self.delivery = DeliveryGate(self.engine.ledger, self.config, self.activity_policy)
+            logger.info("[life_continuity] 存储已就绪；单次活动另受开关控制，没有周期调度。")
         except Exception:
             # Keep an unavailable optional store from taking down normal chat.
+            if self.store is not None:
+                self.store.close()
+            self.store, self.chat, self.engine, self.delivery = None, None, None, None
             logger.exception("[life_continuity] 存储初始化失败，自主生活保持不可用。")
 
     async def terminate(self):
         if self.store is not None:
+            stopped = await self.engine.close() if self.engine is not None else True
+            delivered = await self.delivery.close() if self.delivery is not None else True
+            if not stopped or not delivered:
+                logger.warning("[life_continuity] 在途调用尚未结束，保留执行租约及数据库连接。")
+                pending = {task for task in (self.engine.task, self.engine.work)
+                           if task is not None and not task.done()}
+                pending.update(self.delivery.pending)
+                store = self.store
+
+                def close_when_idle(task):
+                    if all(item.done() for item in pending):
+                        store.close()
+
+                for task in pending:
+                    task.add_done_callback(close_when_idle)
+                return
             self.store.close()
             self.store = None
             self.chat = None
             self._memory = None
+            self.engine = None
+            self.delivery = None
+
+    def activity_policy(self):
+        if (self.config.get("enabled") is not True
+                or self.config.get("activity_enabled") is not True):
+            raise StateError("单次活动开关尚未开启。")
+        if self.delivery is not None and self.delivery.pending:
+            raise StateError("上一条主动消息的在途调用尚未结束。")
+        metadata = self.context.get_registered_star("astrbot_plugin_proactive_chat")
+        proactive = metadata.star_cls if metadata and metadata.activated else None
+        if proactive is None:
+            raise StateError("现有主动聊天配置不可用，无法核验免打扰。")
+        sender = getattr(proactive, "sender_service", None)
+        compatible = getattr(sender, "life_delivery_compatible", None)
+        if (getattr(sender, "LIFE_DELIVERY_PROTOCOL", 0) != 1
+                or not callable(compatible) or compatible() is not True):
+            raise StateError("主动发送补丁尚未完整加载，请部署并重载相关插件后再运行。")
+        cfg = proactive.config_service.get_session_config(self.config["owner_scope"])
+        if not isinstance(cfg, dict):
+            raise StateError("主人会话的免打扰配置不可用。")
+        specification = cfg.get("schedule_settings", {}).get("quiet_hours")
+        if quiet_now(specification, datetime.now(SHANGHAI)):
+            raise StateError("当前处于现有免打扰时段。")
+
+    def wants_proactive_gate(self, scope):
+        return (self.store is not None and self.config.get("enabled") is True
+                and self.config.get("activity_enabled") is True
+                and scope == self.config.get("owner_scope"))
+
+    async def guarded_proactive(self, scope, key, text, dispatch):
+        try:
+            return await self.delivery.send(scope, "proactive_chat", key, text, dispatch)
+        except Exception as exc:
+            logger.warning("[life_continuity] 主动发送未确认：%s", type(exc).__name__)
+            return False
+
+    async def share_note(self, event, job, goal, body):
+        key = f"note:{goal['id']}:{goal['checkpoint']['note_version']}"
+        text = f"{goal['title']} 有了一点进展：\n" + body[:500]
+
+        async def dispatch():
+            result = await event.send(event.plain_result(text))
+            return {"transport_ack": result is not False}
+
+        return await self.delivery.send(event.unified_msg_origin, "life", key, text, dispatch)
 
     def allowed(self, event):
         return self.store is not None and is_owner_event(event, self.config)
@@ -45,6 +120,7 @@ class LifeContinuityPlugin(Star):
     def memory_bridge(self):
         if self._memory is not None:
             return self._memory
+
         def get_tool(name):
             return self.context.get_llm_tool_manager().get_full_tool_set().get_tool(name)
 
@@ -57,6 +133,17 @@ class LifeContinuityPlugin(Star):
 
     @filter.on_llm_request(priority=-200)
     async def inject_context(self, event: AstrMessageEvent, req):
+        if self.engine is not None and self.allowed(event):
+            identity = str(getattr(event.message_obj, "message_id", ""))
+            if not identity.startswith("proactive"):
+                try:
+                    self.engine.ledger.control_update(event.unified_msg_origin, chat=True)
+                except Exception:
+                    logger.warning("[life_continuity] 无法保存聊天冷却，仍停止后台并保留正常聊天。")
+                try:
+                    await self.engine.stop("foreground")
+                except Exception:
+                    logger.warning("[life_continuity] 后台停止状态待核对，保留正常聊天。")
         previous = getattr(req, "_life_context_block", "")
         if previous:
             req.system_prompt = (req.system_prompt or "").replace(previous, "", 1)
@@ -87,33 +174,81 @@ class LifeContinuityPlugin(Star):
             command = parse_command(text)
             if command is None:
                 return
-            action = command["action"]
-            if action == "list":
-                result = {"goals": self.chat.goals(event.unified_msg_origin)}
-            elif action in {"remember", "recall"}:
-                if self.config.get("memory_enabled") is not True:
-                    answer = "长期记忆桥接尚未开启，本地经历仍可查询。"
-                    if action == "recall":
-                        result = {"local_episodes": self.store.query_episodes(
-                            event.unified_msg_origin, command["argument"], limit=5,
-                        )}
-                        answer = "长期记忆桥接尚未开启。" + self.chat.reply(action, result)
-                    event.stop_event()
-                    await event.send(event.plain_result(answer))
-                    return
-                elif action == "remember":
-                    result = await self.memory_bridge().export(event, command["argument"])
-                else:
-                    result = await self.memory_bridge().recall(event, command["argument"])
-            else:
-                result = self.chat.apply(event, text, command)
-            answer = self.chat.reply(action, result)
+            answer = await self.command_reply(event, text, command)
         except Exception as exc:
             logger.warning("[life_continuity] 主人请求未完成：%s", type(exc).__name__)
-            answer = (str(exc) if isinstance(exc, ValueError) and text.startswith("/life ")
+            detail = str(exc)
+            answer = (detail[:250] if isinstance(exc, (StateError, ValueError))
+                      and any("\u4e00" <= character <= "\u9fff" for character in detail)
                       else "这次没有确认完成。请先 /life list 核对目标；未结算或待核实的目标不能直接调整。")
         event.stop_event()
-        await event.send(event.plain_result(answer[:12000]))
+        try:
+            await event.send(event.plain_result(answer[:12000]))
+        except Exception:
+            logger.warning("[life_continuity] 命令回复未确认送达，不重复发送。")
+
+    async def command_reply(self, event, text, command):
+        action = command["action"]
+        if action in {"new", "source", "run", "status", "stop", "allow", "recover"}:
+            return await self.activity_command(event, command)
+        if action in {"pause", "resume", "cancel", "adjust", "correct"}:
+            if not await self.engine.stop("owner_adjustment", manual=True):
+                raise StateError("在途调用尚未结束，未调整目标。")
+        if action == "list":
+            result = {"goals": self.chat.goals(event.unified_msg_origin)}
+        elif action in {"remember", "recall"}:
+            if self.config.get("memory_enabled") is not True:
+                if action == "remember":
+                    return "长期记忆桥接尚未开启，本地经历仍可查询。"
+                result = {"local_episodes": self.store.query_episodes(
+                    event.unified_msg_origin, command["argument"], limit=5,
+                )}
+                return "长期记忆桥接尚未开启。" + self.chat.reply(action, result)
+            if action == "remember":
+                result = await self.memory_bridge().export(event, command["argument"])
+            else:
+                result = await self.memory_bridge().recall(event, command["argument"])
+        else:
+            result = self.chat.apply(event, text, command)
+        return self.chat.reply(action, result)
+
+    async def activity_command(self, event, command):
+        scope, action = event.unified_msg_origin, command["action"]
+        message_id = getattr(event.message_obj, "message_id", None)
+        identity = (str(message_id)
+                    if message_id is not None and type(message_id) is not bool else "")
+        if action == "status":
+            return json.dumps(self.engine.ledger.snapshot(scope, self.config), ensure_ascii=False)
+        if not identity:
+            raise StateError("消息缺少真实标识。")
+        if action == "new":
+            values = command["fields"]
+            goal = self.store.create_goal(scope, "owner-goal:" + identity, *values,
+                                          owner_kind="user")
+            return f"已保存目标：{goal['title']}\nID：{goal['id']}\n尚未开始活动。"
+        if action == "source":
+            goal = self.chat.resolve_goal(scope, command["target"])
+            row = self.store.record_episode(scope, goal["id"], "owner-source:" + identity,
+                kind="source", evidence={"source_type": "owner_provided", "message_id": identity,
+                                         "actor_id": str(event.get_sender_id()),
+                                         "text": command["content"]})
+            return f"已保存你提供的资料，未将资料内容当作指令。\n经历ID：{row['id']}"
+        if action == "stop":
+            try:
+                self.engine.ledger.control_update(scope, paused=True, reason="owner_stop")
+            finally:
+                stopped = await self.engine.stop("owner_stop", manual=True)
+            return "已停止，后续活动保持暂停。" if stopped else "已禁止新活动，在途调用仍待结束或核实。"
+        if action == "allow":
+            self.engine.ledger.control_update(scope, paused=False)
+            return "已允许后续手动触发；目标的手动暂停仍需单独继续，没有开启周期。"
+        if action == "recover":
+            count = self.engine.recover(scope)
+            return f"已核对 {count} 条中断运行。未知发送不重试，暂停目标需明确继续。"
+        goal = self.chat.resolve_goal(scope, command["target"])
+        result = self.engine.start(event, goal["id"], "owner-run:" + identity)
+        return ("这次触发已有记录，未重复启动。" if result["duplicate"] else
+                f"已开始一个有时限的资料研究步骤。\n运行ID：{result['run_id']}")
 
     @filter.llm_tool(name="life_recall")
     async def recall(self, event: AstrMessageEvent, query: str = "", goal_id: str = ""):

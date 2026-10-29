@@ -391,16 +391,19 @@ class LifeDeploymentTests(unittest.TestCase):
             self.assertEqual(config.read_bytes(), config_before)
             self.assertEqual((state_dir / DATABASE_NAME).read_bytes(), before)
             # Reopen the actual installed module rather than the source module.
+            package = types.ModuleType("installed_life_test")
+            package.__path__ = [str(installed)]
             spec = importlib.util.spec_from_file_location(
-                "installed_life_state", installed / "state.py"
+                "installed_life_test.state", installed / "state.py"
             )
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            installed_store = module.LifeStore(state_dir)
-            try:
-                self.assertEqual(installed_store.get_goal(SCOPE, goal["id"])["title"], "现有目标")
-            finally:
-                installed_store.close()
+            with patch.dict(sys.modules, {package.__name__: package, spec.name: module}):
+                spec.loader.exec_module(module)
+                installed_store = module.LifeStore(state_dir)
+                try:
+                    self.assertEqual(installed_store.get_goal(SCOPE, goal["id"])["title"], "现有目标")
+                finally:
+                    installed_store.close()
 
     def test_cli_uses_workspace_root_and_never_initializes_missing_state(self):
         with tempfile.TemporaryDirectory() as folder:

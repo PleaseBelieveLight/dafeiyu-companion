@@ -38,9 +38,22 @@ def parse_command(text):
         raise ValueError("自主生活命令最多2000字。")
     if text == "/life" or text == "/life list":
         return {"action": "list"}
+    if text in {"/life status", "/life stop", "/life allow", "/life recover"}:
+        return {"action": text.split()[1]}
     if text.startswith("/life "):
         parts = text.split(maxsplit=2)
         action = parts[1]
+        if action == "new" and len(parts) == 3:
+            values = [value.strip() for value in parts[2].split(" | ")]
+            if len(values) != 4 or not all(values):
+                raise ValueError("使用 /life new 标题 | 理由 | 结束条件 | 下一步")
+            return {"action": "new", "fields": values}
+        if action in {"run", "source"} and len(parts) == 3:
+            target, separator, content = parts[2].partition(" | ")
+            if (not target.strip()
+                    or (action == "source" and (not separator or not content.strip()))):
+                raise ValueError("使用 /life run 目标ID，或 /life source 目标ID | 资料正文")
+            return {"action": action, "target": target.strip(), "content": content.strip()}
         if action in {"remember", "recall"} and len(parts) == 3:
             if action == "recall" and len(parts[2]) > 200:
                 raise ValueError("记忆查询关键词最多200字。")
@@ -51,8 +64,8 @@ def parse_command(text):
             if action in {"adjust", "feedback", "correct"} and not separator:
                 raise ValueError("请使用 /life 动作 目标ID | 内容")
             return {"action": action, "target": target.strip(), "content": content.strip()}
-        raise ValueError("支持 /life list、pause、resume、cancel、adjust、feedback、correct、"
-                         "remember、recall")
+        raise ValueError("支持 /life new、source、run、status、stop、allow、recover、list、"
+                         "pause、resume、cancel、adjust、feedback、correct、remember、recall")
     match = re.fullmatch(r"(暂停|继续|取消)这个目标[。！!]?", text)
     if match:
         return {"action": {"暂停": "pause", "继续": "resume", "取消": "cancel"}[match[1]],

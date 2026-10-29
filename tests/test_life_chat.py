@@ -16,7 +16,8 @@ sys.path.insert(0, str(ROOT / "plugins"))
 from astrbot_plugin_life_continuity.chat import LifeChat, is_owner_event, parse_command
 from astrbot_plugin_life_continuity.memory_bridge import MemoryBridge
 from astrbot_plugin_life_continuity.state import (
-    APPLICATION_ID, CHAT_SCHEMA, ConflictError, LifeStore, StateError, read_snapshot,
+    APPLICATION_ID, CHAT_SCHEMA, SCHEMA_VERSION, ConflictError, LifeStore, StateError,
+    read_snapshot,
 )
 from life_test_support import FakeEvent, load_plugin
 
@@ -132,19 +133,24 @@ class ChatStateTests(unittest.TestCase):
 
 
 class ChatMigrationTests(unittest.TestCase):
+    @staticmethod
+    def restore_v1_fixture(store):
+        for table in ("activity_calls", "activity_time", "activity_sessions",
+                      "activity_control", "life_deliveries", "chat_events", "memory_exports"):
+            store.db.execute(f"DROP TABLE {table}")
+        store.db.execute("PRAGMA user_version=1")
+
     def test_v1_upgrade_backs_up_committed_data_and_readonly_v1_does_not_upgrade(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             store = LifeStore(folder)
             goal = store.create_goal(SCOPE, "old", "原目标", "理由", "条件", "下一步")
-            store.db.execute("DROP TABLE chat_events")
-            store.db.execute("DROP TABLE memory_exports")
-            store.db.execute("PRAGMA user_version=1")
+            self.restore_v1_fixture(store)
             self.assertEqual(read_snapshot(folder)["schema_version"], 1)
             store.close()
             upgraded = LifeStore(folder)
             try:
-                self.assertEqual(read_snapshot(folder)["schema_version"], 2)
+                self.assertEqual(read_snapshot(folder)["schema_version"], SCHEMA_VERSION)
                 self.assertEqual(upgraded.get_goal(SCOPE, goal["id"])["title"], "原目标")
                 with closing(sqlite3.connect(upgraded.schema_backup)) as backup:
                     self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 1)
@@ -160,9 +166,7 @@ class ChatMigrationTests(unittest.TestCase):
             folder = Path(temporary)
             store = LifeStore(folder)
             store.create_goal(SCOPE, "old", "原目标", "理由", "条件", "下一步")
-            store.db.execute("DROP TABLE chat_events")
-            store.db.execute("DROP TABLE memory_exports")
-            store.db.execute("PRAGMA user_version=1")
+            self.restore_v1_fixture(store)
             store.close()
 
             def fail(instance):

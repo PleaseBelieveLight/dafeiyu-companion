@@ -21,6 +21,13 @@ class FakeEvent:
         self.message_type = "FriendMessage"
         self.send = AsyncMock()
         self.stopped = False
+        self.extras = {}
+
+    def set_extra(self, key, value):
+        self.extras[key] = value
+
+    def get_extra(self, key, default=None):
+        return self.extras.get(key, default)
 
     def get_sender_id(self):
         return self.sender

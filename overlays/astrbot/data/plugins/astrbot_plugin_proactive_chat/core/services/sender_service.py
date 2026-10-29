@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Modified for the Dafeiyu Windows distribution on 2026-10-26.
-# Changes: local compatibility, contextual speech and reliable media delivery.
+# Modified for the Dafeiyu Windows distribution on 2026-10-29.
+# Changes: contextual speech and shared, single-attempt life delivery.
 """发送与装饰钩子服务。
 
 由旧 core/message_sender.py 等价搬迁而来；分段、装饰、TTS 与
@@ -28,6 +28,7 @@ from astrbot.core.platform.platform import PlatformStatus
 from astrbot.core.utils.voice_reply import parse_voice_reply
 
 from ..adapters.astrbot_event import (
+    ProactiveMessageEvent,
     build_proactive_event_for_session,
     dispatch_event_hook,
     resolve_message_type,
@@ -58,6 +59,11 @@ except ImportError:  # pragma: no cover
 
 class SenderService:
     """主动消息发送与装饰钩子服务。"""
+
+    LIFE_DELIVERY_PROTOCOL = 1
+
+    def life_delivery_compatible(self) -> bool:
+        return getattr(ProactiveMessageEvent, "LIFE_DELIVERY_PROTOCOL", 0) == 1
 
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
@@ -436,6 +442,10 @@ class SenderService:
             try:
                 sent = await event.send(chain)
             except Exception as e:
+                if event.get_extra("_life_delivery_guarded", False) is True:
+                    event.set_extra("_life_delivery_uncertain", True)
+                    self._mark_event_send_failed(event)
+                    return False
                 logger.error(f"[主动消息] 事件发送异常喵，回退平台直发: {e}")
                 sent_direct = await self.send_chain_direct(session_id, components)
                 if sent_direct:
@@ -453,12 +463,41 @@ class SenderService:
                 return True
 
             self._mark_event_send_failed(event)
+            if event.get_extra("_life_delivery_guarded", False) is True:
+                event.set_extra("_life_delivery_uncertain", True)
             logger.error("[主动消息] 事件发送与核心 API 兜底均未送达，不再重复尝试喵。")
             return False
 
         return await self.send_chain_direct(session_id, components)
 
     async def send_proactive_message(
+        self, session_id: str, text: str, event: Any = None, initial_chain: list | None = None,
+    ) -> bool:
+        """Share the configured owner's life quota when bounded activities are enabled."""
+        context = getattr(self.plugin, "context", None)
+        getter = getattr(context, "get_registered_star", None)
+        metadata = getter("astrbot_plugin_life_continuity") if callable(getter) else None
+        life = getattr(metadata, "star_cls", None)
+        if (getattr(metadata, "name", None) != "astrbot_plugin_life_continuity"
+                or getattr(metadata, "activated", False) is not True or life is None
+                or life.wants_proactive_gate(session_id) is not True):
+            return await self._send_proactive_message(session_id, text, event, initial_chain)
+        event = event if event is not None else self.build_proactive_event(session_id)
+        if event is None:
+            return False
+        event.set_extra("_life_delivery_guarded", True)
+        identity = str(getattr(event.message_obj, "message_id", ""))
+
+        async def dispatch():
+            sent = await self._send_proactive_message(session_id, text, event, initial_chain)
+            unknown = event.get_extra("_life_delivery_uncertain", False)
+            return {"transport_ack": sent is True and unknown is not True}
+
+        return await life.guarded_proactive(
+            session_id, "proactive:" + identity, text or repr(initial_chain), dispatch,
+        )
+
+    async def _send_proactive_message(
         self,
         session_id: str,
         text: str,
@@ -521,7 +560,8 @@ class SenderService:
                 logger.debug("[主动消息] 装饰后消息链为空，跳过文本发送喵。")
 
             # 可选分段：分段后逐条发送，条目数与装饰后链不同即认为生效。
-            enable_seg = seg_conf.get("enable", False)
+            enable_seg = (seg_conf.get("enable", False)
+                          and event.get_extra("_life_delivery_guarded", False) is not True)
             send_chain = decorated_chain
             segmented = False
             if enable_seg and decorated_chain:

@@ -2,7 +2,7 @@
 
 Goal/episode concepts follow the MIT Dafeiyu reference's bili_activity/life.py.
 This separate ledger has no dependency on Bili, AstrBot or its runtime database.
-Opening a writer migrates schema only; interruption recovery belongs to stage 3.
+Opening a writer migrates schema only; recovery requires an explicit execution lease.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 
 PLUGIN_NAME = "astrbot_plugin_life_continuity"
 DATABASE_NAME = "life.sqlite3"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x44464C31
 GOAL_STATES = {"ready", "running", "paused", "waiting_approval", "blocked",
                "completed", "cancelled"}
@@ -163,6 +163,9 @@ def _inspect_schema(db):
     if application != APPLICATION_ID:
         raise StateError("life database application ID is missing")
     columns = dict(REQUIRED_COLUMNS, **CHAT_COLUMNS) if version >= 2 else REQUIRED_COLUMNS
+    if version >= 3:
+        from .activity_state import ACTIVITY_COLUMNS
+        columns = dict(columns, **ACTIVITY_COLUMNS)
     for table, required in columns.items():
         actual = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
         if not required.issubset(actual):
@@ -206,8 +209,10 @@ class LifeStore:
             raise
 
     def _create_schema(self):
+        from .activity_state import ACTIVITY_SCHEMA
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        statements = (*SCHEMA, *CHAT_SCHEMA) if version == 0 else CHAT_SCHEMA
+        statements = (*(SCHEMA if version == 0 else ()),
+                      *(CHAT_SCHEMA if version < 2 else ()), *ACTIVITY_SCHEMA)
         for statement in statements:
             self.db.execute(statement)
 
@@ -574,6 +579,9 @@ def read_snapshot(folder, *, scope=None, limit=20):
         result["initialized"] = True
         where, params = (" WHERE scope=?", (scope,)) if scope is not None else ("", ())
         columns = dict(REQUIRED_COLUMNS, **CHAT_COLUMNS) if version >= 2 else REQUIRED_COLUMNS
+        if version >= 3:
+            from .activity_state import ACTIVITY_COLUMNS
+            columns = dict(columns, **ACTIVITY_COLUMNS)
         for table in columns:
             result["counts"][table] = db.execute(
                 f"SELECT COUNT(*) FROM {table}{where}", params
@@ -590,6 +598,11 @@ def read_snapshot(folder, *, scope=None, limit=20):
                 episode_id,status,remote_id,recall_verified,details_json,updated_at
                 FROM memory_exports WHERE scope=? ORDER BY updated_at DESC LIMIT ?""",
                 (scope, limit))]
+        if version >= 3:
+            for table in ("activity_control", "activity_time", "activity_calls", "life_deliveries"):
+                result[table] = [_row(row) for row in db.execute(
+                    f"SELECT * FROM {table} WHERE scope=? LIMIT ?", (scope, limit)
+                )]
         result["episodes"] = [_row(row) for row in db.execute("""SELECT e.* FROM episodes e
             WHERE scope=? AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)
             ORDER BY occurred_at DESC LIMIT ?""", (scope, limit))]
