@@ -154,8 +154,18 @@ def find_program(name: str) -> Path | None:
     )
 
 
+def copy_project_plugins(target: Path) -> None:
+    """Install project-owned plugin code without touching configuration or state."""
+    for plugin in (SOURCE / "plugins").iterdir():
+        if plugin.is_dir() and plugin.name != "__pycache__":
+            shutil.copytree(
+                plugin, target / "astrbot/data/plugins" / plugin.name, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+
+
 def apply_overlays(target: Path) -> None:
-    """Apply local public patches and install the two original project plugins."""
+    """Apply local public patches and install project-owned plugins."""
     for folder in ["astrbot", "phone"]:
         overlay = SOURCE / "overlays" / folder
         if overlay.exists():
@@ -163,12 +173,7 @@ def apply_overlays(target: Path) -> None:
                 overlay, target / folder, dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
-    for plugin in (SOURCE / "plugins").iterdir():
-        if plugin.is_dir() and plugin.name != "__pycache__":
-            shutil.copytree(
-                plugin, target / "astrbot/data/plugins" / plugin.name, dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-            )
+    copy_project_plugins(target)
     from patch_selfie_context import apply_selfie_context
     from patch_selfie_references import apply_selfie_references
     from patch_music import apply_music

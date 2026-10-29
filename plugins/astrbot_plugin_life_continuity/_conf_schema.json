@@ -1,0 +1,7 @@
+{
+  "enabled": {
+    "description": "启用自主生活存储（当前阶段仅初始化数据库，不启动活动）",
+    "type": "bool",
+    "default": false
+  }
+}
