@@ -1,6 +1,16 @@
 {
   "enabled": {
-    "description": "启用自主生活存储（当前阶段仅初始化数据库，不启动活动）",
+    "description": "启用自主生活存储和主人私聊接口（当前阶段不启动活动）",
+    "type": "bool",
+    "default": false
+  },
+  "owner_scope": {
+    "description": "主人完整私聊会话标识；留空时不开放聊天与经历接口",
+    "type": "string",
+    "default": ""
+  },
+  "memory_enabled": {
+    "description": "允许主人显式调用 LivingMemory 桥接；要求记忆按当前会话隔离",
     "type": "bool",
     "default": false
   }

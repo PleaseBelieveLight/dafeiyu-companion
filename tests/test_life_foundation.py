@@ -20,6 +20,7 @@ from astrbot_plugin_life_continuity.state import (
     APPLICATION_ID,
     DATABASE_NAME,
     PLUGIN_NAME,
+    SCHEMA_VERSION,
     ConflictError,
     LifeStore,
     StateError,
@@ -59,7 +60,7 @@ class LifeStateTests(unittest.TestCase):
         store = LifeStore(self.folder)
         self.addCleanup(store.close)
         snapshot = read_snapshot(self.folder, scope=SCOPE)
-        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertEqual(snapshot["schema_version"], SCHEMA_VERSION)
         self.assertEqual(snapshot["goals"][0]["checkpoint"]["position"], None)
         self.assertEqual(snapshot["goals"][0]["version"], 2)
         self.assertEqual(snapshot["episodes"][0]["interpretation"]["thought"], "需要进一步核对")
@@ -317,13 +318,22 @@ class LifePluginTests(unittest.IsolatedAsyncioTestCase):
         star.Context, star.Star = object, Star
         star.StarTools = types.SimpleNamespace(get_data_dir=Mock(return_value=self.folder))
         star.register = lambda *args: lambda cls: cls
+        event_api = types.ModuleType("astrbot.api.event")
+        event_api.AstrMessageEvent = object
+        decorator = lambda **kwargs: lambda function: function
+        event_api.filter = types.SimpleNamespace(
+            on_llm_request=decorator, llm_tool=decorator,
+            event_message_type=lambda *args, **kwargs: lambda function: function,
+            EventMessageType=types.SimpleNamespace(PRIVATE_MESSAGE=1),
+        )
         spec = importlib.util.spec_from_file_location(
             "astrbot_plugin_life_continuity._test_main",
             ROOT / "plugins" / PLUGIN_NAME / "main.py",
         )
         self.module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"astrbot": types.ModuleType("astrbot"),
-                                     "astrbot.api": api, "astrbot.api.star": star}):
+                                     "astrbot.api": api, "astrbot.api.star": star,
+                                     "astrbot.api.event": event_api}):
             spec.loader.exec_module(self.module)
         self.data_dir = star.StarTools.get_data_dir
 

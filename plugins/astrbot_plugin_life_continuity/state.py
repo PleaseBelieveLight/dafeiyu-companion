@@ -18,7 +18,7 @@ from pathlib import Path
 
 PLUGIN_NAME = "astrbot_plugin_life_continuity"
 DATABASE_NAME = "life.sqlite3"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x44464C31
 GOAL_STATES = {"ready", "running", "paused", "waiting_approval", "blocked",
                "completed", "cancelled"}
@@ -63,6 +63,21 @@ SCHEMA = (
         PRIMARY KEY(scope,goal_id,version),
         FOREIGN KEY(scope,goal_id) REFERENCES goals(scope,id))""",
 )
+CHAT_SCHEMA = (
+    """CREATE TABLE chat_events (
+        scope TEXT NOT NULL, event_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+        goal_id TEXT NOT NULL, text TEXT NOT NULL, payload_json TEXT NOT NULL,
+        result_json TEXT NOT NULL, created_at REAL NOT NULL,
+        PRIMARY KEY(scope,event_id),
+        FOREIGN KEY(scope,goal_id) REFERENCES goals(scope,id))""",
+    """CREATE TABLE memory_exports (
+        id TEXT PRIMARY KEY, scope TEXT NOT NULL, episode_id TEXT NOT NULL,
+        status TEXT NOT NULL, body TEXT NOT NULL, remote_id TEXT,
+        recall_verified INTEGER NOT NULL DEFAULT 0,
+        details_json TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL,
+        updated_at REAL NOT NULL, UNIQUE(scope,episode_id),
+        FOREIGN KEY(scope,episode_id) REFERENCES episodes(scope,id))""",
+)
 # A declared version must not silently conceal an incomplete migration.
 REQUIRED_COLUMNS = {
     "goals": {"id", "scope", "source_id", "source_fingerprint", "owner_kind", "title", "why",
@@ -73,6 +88,12 @@ REQUIRED_COLUMNS = {
     "episodes": {"id", "scope", "goal_id", "run_id", "source_id", "kind", "occurred_at",
                  "evidence_json", "interpretation_json", "supersedes_id"},
     "notes": {"scope", "goal_id", "version", "body", "evidence_ids_json", "created_at"},
+}
+CHAT_COLUMNS = {
+    "chat_events": {"scope", "event_id", "actor_id", "goal_id", "text", "payload_json",
+                    "result_json", "created_at"},
+    "memory_exports": {"id", "scope", "episode_id", "status", "body", "remote_id",
+                       "recall_verified", "details_json", "created_at", "updated_at"},
 }
 
 
@@ -141,7 +162,8 @@ def _inspect_schema(db):
         return version
     if application != APPLICATION_ID:
         raise StateError("life database application ID is missing")
-    for table, required in REQUIRED_COLUMNS.items():
+    columns = dict(REQUIRED_COLUMNS, **CHAT_COLUMNS) if version >= 2 else REQUIRED_COLUMNS
+    for table, required in columns.items():
         actual = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
         if not required.issubset(actual):
             raise StateError(f"incomplete life database schema: {table}")
@@ -184,7 +206,9 @@ class LifeStore:
             raise
 
     def _create_schema(self):
-        for statement in SCHEMA:
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        statements = (*SCHEMA, *CHAT_SCHEMA) if version == 0 else CHAT_SCHEMA
+        for statement in statements:
             self.db.execute(statement)
 
     def _backup_schema(self, version):
@@ -384,6 +408,150 @@ class LifeStore:
             ))
             return current + 1
 
+    def get_episode(self, scope, episode_id, *, current=True):
+        sql = "SELECT e.* FROM episodes e WHERE e.scope=? AND e.id=?"
+        if current:
+            sql += " AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)"
+        return _row(self.db.execute(sql, (scope, episode_id)).fetchone())
+
+    def query_episodes(self, scope, query="", goal_id="", limit=8):
+        query = _text(query, "query", 200, empty=True)
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("invalid episode limit")
+        sql = """SELECT e.* FROM episodes e WHERE e.scope=? AND NOT EXISTS
+            (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)"""
+        args = [scope]
+        if goal_id:
+            sql += " AND e.goal_id=?"
+            args.append(goal_id)
+        if query:
+            terms = query.split()[:8]
+            clauses = []
+            for term in terms:
+                term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                clauses.append("(e.evidence_json LIKE ? ESCAPE '\\' "
+                               "OR e.interpretation_json LIKE ? ESCAPE '\\')")
+                args.extend([f"%{term}%"] * 2)
+            sql += " AND (" + " OR ".join(clauses) + ")"
+        sql += " ORDER BY e.occurred_at DESC,e.id LIMIT ?"
+        return [_row(row) for row in self.db.execute(sql, (*args, limit))]
+
+    def chat_event(self, scope, event_id):
+        return _row(self.db.execute(
+            "SELECT * FROM chat_events WHERE scope=? AND event_id=?", (scope, event_id)
+        ).fetchone())
+
+    def apply_chat_event(self, scope, actor_id, event_id, goal_id, text, *, action="feedback",
+                         expected_version=None, next_step="", episode_id=""):
+        """Trusted owner-event adapter. Never expose this writer as a free-form Agent tool."""
+        actor_id = _text(actor_id, "actor ID", 100)
+        event_id = _text(event_id, "message ID", 250)
+        text = _text(text, "owner message", 2000)
+        if action not in {"feedback", "pause", "resume", "cancel", "adjust", "correct"}:
+            raise ValueError("invalid owner action")
+        payload = {"action": action, "next_step": next_step, "episode_id": episode_id}
+        with self.transaction():
+            old = self.chat_event(scope, event_id)
+            if old:
+                if (old["actor_id"], old["goal_id"], old["text"], old["payload"]) != (
+                    actor_id, goal_id, text, payload
+                ):
+                    raise ConflictError("message ID already has different content")
+                return old["result"]
+            goal = self.get_goal(scope, goal_id)
+            if not goal:
+                raise StateError("goal does not belong to this scope")
+            result = {"action": action, "goal_id": goal_id, "message_id": event_id}
+            if action in {"feedback", "correct"}:
+                supersedes = None
+                if action == "correct":
+                    previous = self.get_episode(scope, episode_id)
+                    if not previous or previous["goal_id"] != goal_id:
+                        raise StateError("correction source is missing or already revised")
+                    supersedes = episode_id
+                identity = uuid.uuid4().hex
+                evidence = {"source_type": "owner_message", "actor_id": actor_id,
+                            "message_id": event_id, "text": next_step or text}
+                self.db.execute("""INSERT INTO episodes
+                    (id,scope,goal_id,source_id,kind,occurred_at,evidence_json,
+                     interpretation_json,supersedes_id) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (identity, scope, goal_id, "owner:" + event_id,
+                     "owner_correction" if supersedes else "owner_feedback", time.time(),
+                     _json(evidence), "{}", supersedes))
+                result["episode_id"] = identity
+            else:
+                _version(expected_version)
+                if goal["version"] != expected_version:
+                    raise ConflictError("goal version changed; read the latest state first")
+                if goal["status"] not in {"ready", "paused"}:
+                    raise StateError("goal has an active, blocked or terminal state; "
+                                     "no change made")
+                checkpoint = dict(goal["checkpoint"])
+                status = goal["status"]
+                if action == "pause":
+                    status = "paused"
+                    checkpoint.update(pause_reason="owner", resume_policy="manual")
+                elif action == "resume":
+                    status = "ready"
+                    checkpoint.update(pause_reason="", resume_policy="eligible")
+                elif action == "cancel":
+                    status = "cancelled"
+                    checkpoint.update(pause_reason="owner_cancelled", resume_policy="never")
+                elif action == "adjust":
+                    next_step = _text(next_step, "next step")
+                self.db.execute("""UPDATE goals SET status=?,next_step=?,checkpoint_json=?,
+                    version=version+1,updated_at=? WHERE scope=? AND id=? AND version=?""",
+                    (status, next_step if action == "adjust" else goal["next_step"],
+                     _json(checkpoint), time.time(), scope, goal_id, expected_version))
+            updated = self.get_goal(scope, goal_id)
+            result.update(status=updated["status"], version=updated["version"])
+            self.db.execute("INSERT INTO chat_events VALUES (?,?,?,?,?,?,?,?)",
+                            (scope, event_id, actor_id, goal_id, text, _json(payload),
+                             _json(result), time.time()))
+            return result
+
+    def queue_memory(self, scope, episode_id):
+        with self.transaction():
+            episode = self.get_episode(scope, episode_id)
+            if not episode:
+                raise StateError("memory source is missing or revised")
+            old = self.memory_export(scope, episode_id)
+            if old:
+                return old
+            goal = self.get_goal(scope, episode["goal_id"])
+            body = f"[DFL:{episode_id}] 大肥鱼经历资料，事实与感想分开，不代表主人偏好。\n" + _json({
+                "goal_id": goal["id"], "title": goal["title"], "episode_id": episode_id,
+                "kind": episode["kind"], "occurred_at": episode["occurred_at"],
+                "evidence": episode["evidence"], "interpretation": episode["interpretation"],
+            })
+            if len(body) > 6000:
+                raise ValueError("memory source too large; retain it locally")
+            now = time.time()
+            self.db.execute("""INSERT INTO memory_exports
+                (id,scope,episode_id,status,body,created_at,updated_at)
+                VALUES (?,?,?,'pending',?,?,?)""",
+                (uuid.uuid4().hex, scope, episode_id, body, now, now))
+            return self.memory_export(scope, episode_id)
+
+    def memory_export(self, scope, episode_id):
+        return _row(self.db.execute(
+            "SELECT * FROM memory_exports WHERE scope=? AND episode_id=?", (scope, episode_id)
+        ).fetchone())
+
+    def update_memory(self, scope, episode_id, status, *, expected_status, remote_id=None,
+                      recall_verified=False, details=None):
+        if status not in {"pending", "sending", "saved", "uncertain", "failed"}:
+            raise ValueError("invalid memory status")
+        with self.transaction():
+            cursor = self.db.execute("""UPDATE memory_exports SET status=?,remote_id=?,
+                recall_verified=?,details_json=?,updated_at=?
+                WHERE scope=? AND episode_id=? AND status=?""",
+                (status, remote_id, int(recall_verified), _json(details or {}), time.time(),
+                 scope, episode_id, expected_status))
+            if cursor.rowcount != 1:
+                raise ConflictError("memory export state has changed")
+            return self.memory_export(scope, episode_id)
+
 
 def read_snapshot(folder, *, scope=None, limit=20):
     """Read a bounded snapshot without creating/migrating/recovering the ledger."""
@@ -405,7 +573,8 @@ def read_snapshot(folder, *, scope=None, limit=20):
             return result
         result["initialized"] = True
         where, params = (" WHERE scope=?", (scope,)) if scope is not None else ("", ())
-        for table in REQUIRED_COLUMNS:
+        columns = dict(REQUIRED_COLUMNS, **CHAT_COLUMNS) if version >= 2 else REQUIRED_COLUMNS
+        for table in columns:
             result["counts"][table] = db.execute(
                 f"SELECT COUNT(*) FROM {table}{where}", params
             ).fetchone()[0]
@@ -416,6 +585,11 @@ def read_snapshot(folder, *, scope=None, limit=20):
             result[table] = [_row(row) for row in db.execute(
                 f"SELECT * FROM {table} WHERE scope=? ORDER BY {order} DESC LIMIT ?", (scope, limit)
             )]
+        if version >= 2:
+            result["memory_exports"] = [_row(row) for row in db.execute("""SELECT
+                episode_id,status,remote_id,recall_verified,details_json,updated_at
+                FROM memory_exports WHERE scope=? ORDER BY updated_at DESC LIMIT ?""",
+                (scope, limit))]
         result["episodes"] = [_row(row) for row in db.execute("""SELECT e.* FROM episodes e
             WHERE scope=? AND NOT EXISTS (SELECT 1 FROM episodes n WHERE n.supersedes_id=e.id)
             ORDER BY occurred_at DESC LIMIT ?""", (scope, limit))]
