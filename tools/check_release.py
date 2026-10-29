@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_DIRS = {
+    "scripts",
     "tools",
     "plugins",
     "overlays",
@@ -94,7 +95,8 @@ def inspect(root: Path = ROOT) -> list[str]:
         )
         allowed = {p.relative_to(root).as_posix() for p in source_files(root)}
         for name in filter(None, result.stdout.split("\0")):
-            if name not in allowed:
+            # A moved/deleted working-tree file is absent from the source export.
+            if name not in allowed and (root / name).exists():
                 problems.append("Tracked runtime or unexpected file: " + name)
     return problems
 

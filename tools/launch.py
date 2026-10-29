@@ -20,7 +20,7 @@ def command(action: str, args: list[str]) -> list[str]:
     }
     python = RUNTIME_ROOT / "runtime/astrbot/Scripts/python.exe"
     if not python.is_file():
-        raise RuntimeError(f"Run 安装.cmd first. Runtime not found: {RUNTIME_ROOT}")
+        raise RuntimeError(f"Run scripts/安装配置/安装.cmd first. Runtime not found: {RUNTIME_ROOT}")
     if action in scripts:
         return [str(python), str(TOOLS / scripts[action]), *args]
     if action not in {

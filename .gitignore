@@ -1,3 +1,6 @@
+# Local IDE settings and session history
+/.idea/
+
 # Local accounts and generated secrets
 /config/*
 !/config/settings.example.json

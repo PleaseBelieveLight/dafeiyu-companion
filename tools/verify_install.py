@@ -9,7 +9,7 @@ def main():
     env = dict(runtime_env(), ASTRBOT_ROOT=str(ROOT / "astrbot"))
     python = ROOT / "runtime/astrbot/Scripts/python.exe"
     if not python.is_file():
-        raise RuntimeError("Run 安装.cmd first")
+        raise RuntimeError("Run scripts/安装配置/安装.cmd first")
     subprocess.run([str(python), "-m", "pip", "check"], check=True, env=env)
     subprocess.run(
         [str(ROOT / "runtime/tools/Scripts/python.exe"), "-m", "pip", "check"], check=True, env=env

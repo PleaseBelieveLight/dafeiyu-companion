@@ -427,7 +427,8 @@ def main():
         help="Skip binary dependencies; intended for CI source checks",
     )
     parser.add_argument(
-        "--skip-model", action="store_true", help="Download bge-m3 later with prepare-model.cmd"
+        "--skip-model", action="store_true",
+        help="Download bge-m3 later with scripts/安装配置/准备记忆模型.cmd",
     )
     args = parser.parse_args()
     if args.sources_only and not args.stage_only:

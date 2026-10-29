@@ -82,18 +82,27 @@ def backup_code(stamp: str) -> Path:
     return archive_path
 
 
-def install_redirects() -> None:
-    """Keep old shortcuts working while executing the editable project scripts."""
-    for source in SOURCE_ROOT.glob("*.cmd"):
-        if source.name == "安装.cmd":
+def remove_legacy_cmd_redirects() -> list[Path]:
+    """Remove only unchanged, generated runtime shortcuts; preserve custom scripts."""
+    removed = []
+    for path in ROOT.glob("*.cmd"):
+        if not path.is_file() or path.is_symlink() or path.resolve().parent != ROOT.resolve():
             continue
-        text = (
+        expected = (
             '@echo off\n'
             'chcp 65001 >nul\n'
             f'set "DAFEIYU_RUNTIME_ROOT={ROOT}"\n'
-            f'call "{source}" %*\n'
+            f'call "{SOURCE_ROOT / path.name}" %*\n'
         )
-        (ROOT / source.name).write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+        if path.read_bytes() != expected.replace("\n", "\r\n").encode("utf-8"):
+            continue
+        path.unlink()
+        removed.append(path)
+    return removed
+
+
+def refresh_legacy_tool_redirects() -> None:
+    """Keep legacy Python references working without recreating runtime CMD entries."""
     wrapper = (
         '"""Compatibility entry point; editable code lives in dafeiyu-companion."""\n'
         "import os\nimport runpy\nimport sys\nfrom pathlib import Path\n"
@@ -130,7 +139,9 @@ def deploy(prune_legacy_source: bool = False) -> None:
     from install import apply_overlays
 
     if not (ROOT / "config/settings.json").is_file() or not (ROOT / "astrbot/main.py").is_file():
-        raise RuntimeError("Run 安装.cmd first; deploy only updates an existing runtime")
+        raise RuntimeError(
+            "Run scripts/安装配置/安装.cmd first; deploy only updates an existing runtime"
+        )
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     backup = backup_code(stamp)
     print("Recovery backup: " + str(backup), flush=True)
@@ -150,7 +161,8 @@ def deploy(prune_legacy_source: bool = False) -> None:
         preserve_local_programs()
         apply_overlays(ROOT)
         update_admin_config(ROOT / "astrbot/data/mcp_server.json")
-        install_redirects()
+        refresh_legacy_tool_redirects()
+        remove_legacy_cmd_redirects()
         subprocess.run(
             [str(control.ASTROPY), str(TOOLS / "verify_install.py")],
             cwd=SOURCE_ROOT, env=runtime_env(ROOT), check=True,

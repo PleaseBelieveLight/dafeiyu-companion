@@ -93,7 +93,9 @@ class WorkspaceTests(unittest.TestCase):
                 patch.object(deploy, "backup_code", return_value=root / "backup.zip"), \
                 patch.object(deploy, "preserve_local_programs"), \
                 patch("install.apply_overlays"), patch.object(deploy, "update_admin_config"), \
-                patch.object(deploy, "install_redirects"), patch.object(deploy.subprocess, "run"), \
+                patch.object(deploy, "refresh_legacy_tool_redirects"), \
+                patch.object(deploy, "remove_legacy_cmd_redirects"), \
+                patch.object(deploy.subprocess, "run"), \
                 patch.object(deploy, "wait_ready"):
                 deploy.deploy(prune_legacy_source=True)
             self.assertFalse((root / "source/dafeiyu-astrbot-main").exists())
@@ -128,6 +130,52 @@ class WorkspaceTests(unittest.TestCase):
             )
             self.assertEqual(json.loads((root / "config/settings.json").read_text()),
                              {"existing_option": "preserve"})
+
+    def test_runtime_cleanup_removes_only_unchanged_generated_cmd_entries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            root.mkdir()
+            source = Path(folder) / "project"
+            generated = root / "启动全部.cmd"
+            text = (
+                '@echo off\r\nchcp 65001 >nul\r\n'
+                f'set "DAFEIYU_RUNTIME_ROOT={root}"\r\n'
+                f'call "{source / generated.name}" %*\r\n'
+            )
+            generated.write_bytes(text.encode("utf-8"))
+            custom = root / "自定义.cmd"
+            custom.write_bytes(b"@echo off\r\necho custom\r\n")
+            edited = root / "停止全部.cmd"
+            edited.write_bytes(text.replace(generated.name, edited.name).encode("utf-8")
+                               + b"rem local change\r\n")
+            unrelated = root / "settings.json"
+            unrelated.write_text("{}", encoding="utf-8")
+            custom_folder = root / "目录.cmd"
+            custom_folder.mkdir()
+            with patch.object(deploy, "ROOT", root), patch.object(deploy, "SOURCE_ROOT", source):
+                self.assertEqual(deploy.remove_legacy_cmd_redirects(), [generated])
+                self.assertEqual(deploy.remove_legacy_cmd_redirects(), [])
+            self.assertFalse(generated.exists())
+            self.assertTrue(custom.exists())
+            self.assertTrue(edited.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(custom_folder.is_dir())
+
+    def test_refreshing_legacy_python_tools_does_not_recreate_cmd_entries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            source = Path(folder) / "project"
+            (root / "tools").mkdir(parents=True)
+            (source / "tools").mkdir(parents=True)
+            (source / "启动全部.cmd").touch()
+            (source / "tools/control.py").touch()
+            legacy = root / "tools/control.py"
+            legacy.write_text("# old wrapper", encoding="utf-8")
+            with patch.object(deploy, "ROOT", root), \
+                patch.object(deploy, "TOOLS", source / "tools"):
+                deploy.refresh_legacy_tool_redirects()
+            self.assertEqual(list(root.glob("*.cmd")), [])
+            self.assertIn("runpy.run_path", legacy.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
