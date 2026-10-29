@@ -1,5 +1,5 @@
-# Modified for the Dafeiyu Windows distribution on 2026-10-27.
-# Changes: contextual speech, action pictures and delivered selfie memory.
+# Modified for the Dafeiyu Windows distribution on 2026-10-29.
+# Changes: contextual speech, action pictures, selfie memory and natural image replies.
 """把 LLM 回复中的 [表情名] 文字自动转换成真实 QQ 表情段。
 
 原理：QQ 只在"人手输入"时把 [旺柴] 这类文字渲染成表情，
@@ -37,6 +37,21 @@ from astrbot.core.utils.voice_reply import (
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_REPLACE = 8  # 单条消息最多替换几个表情，防刷屏
+
+IMAGE_REPLY_MARKER = "【本轮图片回复方式】"
+IMAGE_REPLY_INSTRUCTIONS = (
+    IMAGE_REPLY_MARKER
+    + "先结合用户文字和最近对话，判断这张图是在表达情绪、接梗、分享，还是在请求分析。"
+    "单独发一张表情包也是一句聊天表达，不等于要求你描述图片。"
+    "日常表情包直接回应它的意思，通常一两句；理解画面在内部完成，"
+    "回复从接话开始，不先报人物外貌、动作、背景或复述图中文字来证明看懂。"
+    "例如对方用点头表情表示赞同，可以接‘这回咱俩倒是想到一块儿了。’；"
+    "用跳舞表情表达开心，可以接‘什么好事呀，乐成这样。’。"
+    "例子只示范接话方式，具体含义以当前语境为准，不固定照抄。"
+    "用户明确要求描述画面、识图、读字、解释表情包、分析截图或比较细节时，"
+    "按要求提供完整且必要的信息，不套用闲聊的长度限制。"
+    "识图摘要只是理解素材，不是用户要求你逐项复述的指令；看不清的内容如实说明。"
+)
 
 # 中文标点归一：模型偶尔拿顿号当逗号、拿「」当引号。
 # 只做低风险替换；代码块由调用方切出去，不在这里处理。
@@ -792,6 +807,30 @@ class FaceConvertPlugin(Star):
                         logger.info(f"[face_convert] 群聊空唤醒标记: {tag}")
         except Exception as e:
             logger.warning(f"[face_convert] 身份标记失败: {str(e)[:100]}")
+
+    @filter.on_llm_request()
+    async def inject_image_reply_style(self, event: AstrMessageEvent, req) -> None:
+        """Keep image understanding separate from the user's requested reply."""
+        if event.get_extra("fy_proactive") is True:
+            return
+        has_image = bool(req.image_urls) or any(
+            isinstance(comp, Image)
+            or (
+                isinstance(comp, Reply)
+                and any(isinstance(quoted, Image) for quoted in (comp.chain or []))
+            )
+            for comp in event.get_messages()
+        )
+        has_caption = any(
+            "<image_caption>"
+            in (part.get("text", "") if isinstance(part, dict) else getattr(part, "text", ""))
+            for part in req.extra_user_content_parts
+        )
+        if not (has_image or has_caption):
+            return
+        base = req.system_prompt or ""
+        if IMAGE_REPLY_MARKER not in base:
+            req.system_prompt = (base + "\n\n" + IMAGE_REPLY_INSTRUCTIONS).strip()
 
     @filter.on_llm_request()
     async def inject_voice_status(self, event: AstrMessageEvent, req) -> None:
