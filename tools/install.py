@@ -170,8 +170,10 @@ def apply_overlays(target: Path) -> None:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
     from patch_selfie_context import apply_selfie_context
+    from patch_selfie_references import apply_selfie_references
 
     apply_selfie_context(target)
+    apply_selfie_references(target)
     runtime_tests = target / "astrbot/tests"
     runtime_tests.mkdir(parents=True, exist_ok=True)
     (runtime_tests / "__init__.py").touch()
@@ -230,6 +232,11 @@ def apply_overlays(target: Path) -> None:
     )
     reference.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SOURCE / "assets/selfie-reference.png", reference)
+    shutil.copytree(
+        SOURCE / "assets/selfie-references",
+        target / "astrbot/data/plugin_data/astrbot_plugin_omnidraw/selfie_references",
+        dirs_exist_ok=True,
+    )
 
 
 def install_environments(target: Path) -> None:

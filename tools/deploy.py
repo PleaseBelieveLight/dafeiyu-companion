@@ -58,6 +58,9 @@ def managed_paths() -> list[Path]:
     paths.extend(ROOT.glob("*.cmd"))
     paths.extend((ROOT / "config").glob("*.json"))
     paths.extend((ROOT / "astrbot/tests").glob("test_*.py"))
+    media_data = ROOT / "astrbot/data/plugin_data/astrbot_plugin_omnidraw"
+    paths.extend((media_data / "selfie_references").glob("*"))
+    paths.append(media_data / "files/persona_config/persona_ref_image/dafeiyu.png")
     paths.extend([
         ROOT / "astrbot/data/mcp_server.json",
         ROOT / "astrbot/astrbot/core/provider/func_tool_manager.py",

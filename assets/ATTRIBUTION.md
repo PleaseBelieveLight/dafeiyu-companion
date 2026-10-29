@@ -1,6 +1,6 @@
 # 头像素材 · 授权与署名
 
-本目录是给 QQ 机器人 / 社区二创用的头像素材，**均来自社区画师，已按各自授权条款使用**。
+本目录是给 QQ 机器人 / 社区二创用的头像素材，各批次的来源、授权与署名见下文。
 大肥鱼（DeepSeek 蓝鲸的社区二创形象）非官方角色，请同样尊重原创画师的署名要求。
 
 ## v1-六视图（4 张）
@@ -15,6 +15,14 @@
 - 素材源自 [Sutera-Diffusus/dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)
   的单人状态立绘（MIT License），裁剪为方形头像
 - 署名：**Sutera-Diffusus · https://github.com/Sutera-Diffusus/dsh-whale-musume**（MIT）
+
+## v3 场景自拍参考图（18 张）
+
+- `selfie-references/` 原样复制自大肥鱼原项目 `assets/avatars/v3-20261025/`。
+- 上游说明：用户提供的 ChatGPT 生成图，2026-10-20 与 2026-10-25 两批。
+- 来源：https://github.com/whyever77/dafeiyu-astrbot （MIT）。
+- 用途：按自拍场景选择角色外观、画风和构图参考；具体映射见该目录 README。
+- 原有 `selfie-reference.png` 的 Sutera-Diffusus 署名继续适用。
 
 ## 使用建议
 
