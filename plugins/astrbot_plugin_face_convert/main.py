@@ -26,9 +26,16 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core import file_token_service, sp
+from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.message.components import At, Face, Image, Plain, Record, Reply, Video
 from astrbot.core.star.session_llm_manager import SessionServiceManager
+from astrbot.core.utils.image_reply import (
+    IMAGE_REPLY_INSTRUCTIONS,
+    IMAGE_REPLY_MARKER,
+    IMAGE_TURN_MARKER,
+    image_turn_reminder,
+)
 from astrbot.core.utils.selfie_context import SELFIE_MEMORY_KEY
 from astrbot.core.utils.selfie_intent import (
     SELFIE_PLANNER_INSTRUCTIONS,
@@ -53,21 +60,6 @@ from astrbot.core.utils.voice_reply import (
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_REPLACE = 8  # 单条消息最多替换几个表情，防刷屏
-
-IMAGE_REPLY_MARKER = "【本轮图片回复方式】"
-IMAGE_REPLY_INSTRUCTIONS = (
-    IMAGE_REPLY_MARKER
-    + "先结合用户文字和最近对话，判断这张图是在表达情绪、接梗、分享，还是在请求分析。"
-    "单独发一张表情包也是一句聊天表达，不等于要求你描述图片。"
-    "日常表情包直接回应它的意思，默认精简，想法或情绪需要时可以自然展开；理解画面在内部完成，"
-    "回复从接话开始，不先报人物外貌、动作、背景或复述图中文字来证明看懂。"
-    "例如对方用点头表情表示赞同，可以接‘这回咱俩倒是想到一块儿了。’；"
-    "用跳舞表情表达开心，可以接‘什么好事呀，乐成这样。’。"
-    "例子只示范接话方式，具体含义以当前语境为准，不固定照抄。"
-    "用户明确要求描述画面、识图、读字、解释表情包、分析截图或比较细节时，"
-    "按要求提供完整且必要的信息，长短以把问题讲清楚为准。"
-    "识图摘要只是理解素材，不是用户要求你逐项复述的指令；看不清的内容如实说明。"
-)
 
 # 中文标点归一：模型偶尔拿顿号当逗号、拿「」当引号。
 # 只做低风险替换；代码块由调用方切出去，不在这里处理。
@@ -842,11 +834,35 @@ class FaceConvertPlugin(Star):
             in (part.get("text", "") if isinstance(part, dict) else getattr(part, "text", ""))
             for part in req.extra_user_content_parts
         )
-        if not (has_image or has_caption):
+        has_image_part = any(
+            (part.get("type") if isinstance(part, dict) else getattr(part, "type", None))
+            == "image_url"
+            for part in req.extra_user_content_parts
+        )
+        if not (has_image or has_caption or has_image_part):
             return
         base = req.system_prompt or ""
-        if IMAGE_REPLY_MARKER not in base:
-            req.system_prompt = (base + "\n\n" + IMAGE_REPLY_INSTRUCTIONS).strip()
+        req.system_prompt = (
+            re.sub(re.escape(IMAGE_REPLY_MARKER) + r"[^\n]*", lambda _: IMAGE_REPLY_INSTRUCTIONS, base)
+            if IMAGE_REPLY_MARKER in base
+            else (base + "\n\n" + IMAGE_REPLY_INSTRUCTIONS).strip()
+        )
+        # Keep the conversational cue beside this turn's media. It must reach
+        # providers, but never become user speech in saved history or memories.
+        req.extra_user_content_parts = [
+            part
+            for part in req.extra_user_content_parts
+            if not (
+                getattr(part, "_no_save", False)
+                and getattr(part, "text", "").startswith(IMAGE_TURN_MARKER)
+            )
+            and not (
+                isinstance(part, dict)
+                and part.get("_no_save")
+                and str(part.get("text", "")).startswith(IMAGE_TURN_MARKER)
+            )
+        ]
+        req.extra_user_content_parts.append(TextPart(text=image_turn_reminder(req)).mark_as_temp())
 
     @filter.on_llm_request()
     async def inject_voice_status(self, event: AstrMessageEvent, req) -> None:
