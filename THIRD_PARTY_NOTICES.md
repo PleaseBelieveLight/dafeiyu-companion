@@ -5,7 +5,7 @@
 
 | 组件                   | 来源与许可信息                                                                            | 本仓库内容                                                                               |
 |------------------------|-------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| 大肥鱼原项目           | https://github.com/whyever77/dafeiyu-astrbot ，MIT                                        | 两个插件、公开人格/手册、浏览器/ASR 接线及本地修改；许可在 `LICENSES/dafeiyu-MIT.txt`    |
+| 大肥鱼参考项目         | https://github.com/whyever77/dafeiyu-astrbot ，MIT                                        | 两个插件、公开人格/手册、浏览器/ASR 接线及本地修改；许可在 `LICENSES/dafeiyu-MIT.txt`    |
 | AstrBot                | https://github.com/AstrBotDevs/AstrBot ，AGPL-3.0-or-later                                | 已修改核心文件与语音协议补丁；完整上游源码由安装器下载                                   |
 | LivingMemory           | https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory ，见上游 LICENSE | 安装器获取                                                                               |
 | 主动聊天插件           | https://github.com/Pancakes-Labs/astrbot_plugin_proactive_chat ，见上游 LICENSE           | 兼容与发送补丁，上游源码由安装器获取                                                     |
