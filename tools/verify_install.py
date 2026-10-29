@@ -25,6 +25,7 @@ def main():
             "tests.test_dafeiyu_action_execution",
             "tests.test_dafeiyu_selfie_context",
             "tests.test_dafeiyu_selfie_reference",
+            "tests.test_dafeiyu_selfie_intent",
             "tests.test_dafeiyu_image_reply",
             "-q",
         ],

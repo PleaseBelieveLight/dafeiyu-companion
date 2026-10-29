@@ -17,6 +17,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from types import SimpleNamespace
 
 import aiohttp
@@ -29,8 +30,17 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.message.components import At, Face, Image, Plain, Record, Reply, Video
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.utils.selfie_context import SELFIE_MEMORY_KEY
+from astrbot.core.utils.selfie_intent import (
+    SELFIE_PLANNER_INSTRUCTIONS,
+    SHANGHAI,
+    fallback_selfie_action,
+    parse_selfie_plan,
+    recent_selfie_dialogue,
+    selfie_request_kind,
+)
 from astrbot.core.utils.voice_reply import (
     ACTION_MEDIA_INSTRUCTIONS,
+    SELFIE_MEDIA_INSTRUCTIONS,
     VOICE_REPLY_INSTRUCTIONS,
     parse_voice_reply,
 )
@@ -903,6 +913,7 @@ class FaceConvertPlugin(Star):
                 # Filter this request only; global tool settings remain intact.
                 tools.remove_tool(name)
         action_note = await self.send_requested_action_picture(event, req, media_names)
+        selfie_request_note = await self.send_requested_selfie(event, req, media_names)
         selfie_note = ""
         try:
             records = await sp.get_async(
@@ -947,8 +958,13 @@ class FaceConvertPlugin(Star):
             marker
             + VOICE_REPLY_INSTRUCTIONS
             + ACTION_MEDIA_INSTRUCTIONS
+            + SELFIE_MEDIA_INSTRUCTIONS
+            + "当前北京时间："
+            + datetime.now(SHANGHAI).strftime("%Y-%m-%d %H:%M")
+            + "。"
             + media_state
             + action_note
+            + selfie_request_note
             + selfie_note
             + "本轮状态："
             + state
@@ -959,6 +975,98 @@ class FaceConvertPlugin(Star):
             if marker in base
             else (base + "\n\n" + block).strip()
         )
+
+    async def send_requested_selfie(self, event, req, media_names) -> str:
+        """Plan explicit/contextual selfies and execute the native guarded tool once."""
+        cached = event.get_extra("_fy_selfie_intent")
+        if isinstance(cached, dict):
+            return cached["note"]
+        if (
+            event.get_extra("fy_proactive") is True
+            or event.get_extra("_fy_selfie_followup") is True
+            or isinstance(event.get_extra("_fy_action_picture"), dict)
+            or "generate_selfie" not in media_names
+        ):
+            return ""
+        message = event.get_message_str() or ""
+        kind = selfie_request_kind(message)
+        if not kind:
+            return ""
+        decision = {"note": ""}
+        event.set_extra("_fy_selfie_intent", decision)
+        dialogue = recent_selfie_dialogue(req)
+        if kind == "contextual" and not any(item["role"] == "assistant" for item in dialogue):
+            return ""
+        now = datetime.now(SHANGHAI)
+        action = fallback_selfie_action(message, dialogue, now)
+        generate = kind == "explicit"
+        try:
+            getter = getattr(self.context, "get_using_provider_async", None)
+            provider = await getter(event.unified_msg_origin) if getter else None
+            if provider is not None:
+                response = await asyncio.wait_for(
+                    provider.text_chat(
+                        prompt=json.dumps(
+                            {
+                                "current_time": now.isoformat(timespec="minutes"),
+                                "timezone": "Asia/Shanghai",
+                                "request_kind": kind,
+                                "message": message[:1200],
+                                "dialogue": dialogue,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        system_prompt=SELFIE_PLANNER_INSTRUCTIONS,
+                    ),
+                    timeout=20,
+                )
+                planned, scene = parse_selfie_plan(response.completion_text)
+                generate = planned
+                if planned:
+                    action = scene
+        except Exception as exc:
+            logger.warning("Selfie scene planning unavailable (%s)", type(exc).__name__)
+        if not generate:
+            return ""
+        tool = (
+            self.context.get_llm_tool_manager()
+            .get_full_tool_set()
+            .get_tool("generate_selfie")
+        )
+        if tool is None or not tool.active:
+            return ""
+        outcome = {"sent": False, "failure_text": "图片这次没生成成功，暂时没法给你看。"}
+        event.set_extra("_fy_selfie_picture", outcome)
+        decision["note"] = "本轮自拍未成功发送，简短说明失败，不能声称成功，不要再次生成。"
+        context = ContextWrapper(
+            context=SimpleNamespace(context=self.context, event=event, extra={})
+        )
+        try:
+            result = await asyncio.wait_for(tool.call(context, action=action, count=1), timeout=360)
+            result_text = str(result or "")
+            if re.search(r"已成功生成并下发了\s*[1-9]\d*\s*张图", result_text):
+                outcome["sent"] = True
+                decision["note"] = (
+                    "本轮已实际生成并成功发送一张你的角色自拍，用户的发图请求已经完成。"
+                    "根据刚发出的自拍记录与前文自然接一两句话，默认不解说画面，"
+                    "不再问场景、不教 /自拍 命令、不再次调用生图。"
+                    "创作意图不等于成图细节，未识别成图时不编造可见内容。"
+                )
+            elif "429" in result_text or "usage limit" in result_text.lower() or "额度" in result_text:
+                outcome["failure_text"] = "生图接口的额度受限，这次没生成图片。"
+            elif (
+                "permission denied" in result_text.lower()
+                or "白名单" in result_text
+                or "黑名单" in result_text
+            ):
+                outcome["failure_text"] = "当前没有使用自拍工具的权限，这次没生成图片。"
+        except Exception as exc:
+            logger.warning("Requested selfie failed (%s)", type(exc).__name__)
+        finally:
+            for name in ("generate_selfie", "generate_image"):
+                req.func_tool.remove_tool(name)
+        logger.info("Requested contextual selfie sent: %s", outcome["sent"])
+        return decision["note"]
 
     ACTION_REQUEST_RE = re.compile(
         r"(?:请|麻烦|你|大肥鱼|肥鱼|给我|给大家|帮我|来|再|先|快|能不能|"
@@ -1145,6 +1253,22 @@ class FaceConvertPlugin(Star):
                 )
                 return
             text = getattr(response, "completion_text", None) or ""
+            selfie_picture = event.get_extra("_fy_selfie_picture")
+            if isinstance(selfie_picture, dict):
+                fallback = (
+                    selfie_picture["failure_text"]
+                    if not selfie_picture["sent"]
+                    else "喏，给你看～"
+                    if not text.strip()
+                    or re.search(
+                        r"/自拍|(?:给我|提供|补充).{0,10}场景|无法.{0,8}(?:自拍|发图)", text
+                    )
+                    else ""
+                )
+                if fallback:
+                    event.set_extra("_fy_voice_plan", {"text": fallback, "voice": ""})
+                    response.completion_text = fallback
+                    return
             if not text:
                 return
             plan = parse_voice_reply(text)
