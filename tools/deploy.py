@@ -143,6 +143,7 @@ def deploy(prune_legacy_source: bool = False) -> None:
     import control
     from install import apply_overlays
 
+    resolved_root = ROOT.resolve()
     if not (ROOT / "config/settings.json").is_file() or not (ROOT / "astrbot/main.py").is_file():
         raise RuntimeError(
             "Run scripts/安装配置/安装.cmd first; deploy only updates an existing runtime"
@@ -153,7 +154,9 @@ def deploy(prune_legacy_source: bool = False) -> None:
     legacy = ROOT / "source/dafeiyu-astrbot-main"
     retired = ROOT / "source" / (".retired-" + stamp)
     if legacy.exists() and prune_legacy_source:
-        if legacy.is_symlink() or legacy.resolve() != ROOT / "source/dafeiyu-astrbot-main":
+        # Resolve the root's Windows short-name alias, but keep the expected child
+        # lexical so a redirected source directory still fails this comparison.
+        if legacy.is_symlink() or legacy.resolve() != resolved_root / "source/dafeiyu-astrbot-main":
             raise RuntimeError("Refusing to move a linked or unexpected legacy source directory")
     control.detach_supervisor()
     state = control.load(control.RUN / "services.json", {})
@@ -183,7 +186,7 @@ def deploy(prune_legacy_source: bool = False) -> None:
         with zipfile.ZipFile(backup) as archive:
             for member in archive.infolist():
                 target = (ROOT / member.filename).resolve()
-                if not target.is_relative_to(ROOT):
+                if not target.is_relative_to(resolved_root):
                     raise RuntimeError("Unexpected recovery archive path")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(member))

@@ -53,7 +53,10 @@ class SelfieReferenceTests(unittest.TestCase):
             with self.subTest(style=style):
                 result = select_selfie_reference(self.config, action, self.data_dir)
                 self.assertEqual(result.style, style)
-                self.assertEqual(result.images, (str(self.refs / REFERENCE_STYLES[style][0]),))
+                self.assertEqual(len(result.images), 1)
+                self.assertTrue(Path(result.images[0]).samefile(
+                    self.refs / REFERENCE_STYLES[style][0]
+                ))
                 self.assertIn("以本次要求为准", result.prompt_suffix)
 
     def test_explicit_style_and_scene_take_precedence_over_ambient_night(self):

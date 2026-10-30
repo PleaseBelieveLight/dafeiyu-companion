@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -77,7 +78,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_deployment_retires_old_source_without_stopping_qq_or_memory_server(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder) / "runtime"
+            root.mkdir()
+            # Exercise an alias on every platform, even without Windows 8.3 names.
+            root = root / ".." / "runtime"
             for name in ("config/settings.json", "astrbot/main.py", "source/dafeiyu-astrbot-main/old.py"):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +110,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_failed_deployment_restores_the_legacy_source_and_configuration(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder) / "runtime"
+            root.mkdir()
+            root = root / ".." / "runtime"
             for name, text in {
                 "config/settings.json": '{"existing_option": "preserve"}',
                 "astrbot/main.py": "# existing runtime",
@@ -130,6 +136,71 @@ class WorkspaceTests(unittest.TestCase):
             )
             self.assertEqual(json.loads((root / "config/settings.json").read_text()),
                              {"existing_option": "preserve"})
+
+    def test_deployment_rejects_linked_or_redirected_source_before_stopping_services(self):
+        for link_type in ("symlink", "redirected_parent"):
+            with self.subTest(link_type=link_type), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder) / "runtime"
+                for name in ("config/settings.json", "astrbot/main.py",
+                             "source/dafeiyu-astrbot-main/old.py"):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("original", encoding="utf-8")
+                legacy = root / "source/dafeiyu-astrbot-main"
+                outside = Path(folder) / "outside"
+                outside.mkdir()
+                original_resolve, original_is_symlink = Path.resolve, Path.is_symlink
+
+                def resolve(path, *args, **kwargs):
+                    if path == legacy and link_type == "redirected_parent":
+                        return original_resolve(outside)
+                    return original_resolve(path, *args, **kwargs)
+
+                def is_symlink(path):
+                    if path == legacy and link_type == "symlink":
+                        return True
+                    return original_is_symlink(path)
+
+                control = types.SimpleNamespace(detach_supervisor=Mock())
+                with patch.object(deploy, "ROOT", root), \
+                    patch.dict(sys.modules, {"control": control}), \
+                    patch.object(deploy, "backup_code", return_value=root / "backup.zip"), \
+                    patch.object(Path, "resolve", resolve), \
+                    patch.object(Path, "is_symlink", is_symlink), \
+                    patch("install.apply_overlays") as apply, \
+                    self.assertRaisesRegex(RuntimeError, "linked or unexpected"):
+                    deploy.deploy(prune_legacy_source=True)
+                control.detach_supervisor.assert_not_called()
+                apply.assert_not_called()
+                self.assertEqual((legacy / "old.py").read_text(encoding="utf-8"), "original")
+                self.assertEqual(list(outside.iterdir()), [])
+
+    def test_recovery_rejects_archive_escape_with_a_noncanonical_runtime_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            root.mkdir()
+            root = root / ".." / "runtime"
+            for name in ("config/settings.json", "astrbot/main.py"):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+            outside = Path(folder) / "outside.txt"
+            outside.write_text("preserve", encoding="utf-8")
+            backup = root / "backup.zip"
+            with zipfile.ZipFile(backup, "w") as archive:
+                archive.writestr("../outside.txt", "overwrite")
+            control = types.SimpleNamespace(
+                RUN=root / "run", load=Mock(return_value={}),
+                detach_supervisor=Mock(), stop_info=Mock(), store=Mock(),
+            )
+            with patch.object(deploy, "ROOT", root), \
+                patch.dict(sys.modules, {"control": control}), \
+                patch.object(deploy, "backup_code", return_value=backup), \
+                patch.object(deploy, "preserve_local_programs"), \
+                patch("install.apply_overlays", side_effect=RuntimeError("patch mismatch")), \
+                self.assertRaisesRegex(RuntimeError, "Unexpected recovery archive path"):
+                deploy.deploy()
+            self.assertEqual(outside.read_text(encoding="utf-8"), "preserve")
 
     def test_runtime_cleanup_removes_only_unchanged_generated_cmd_entries(self):
         with tempfile.TemporaryDirectory() as folder:
