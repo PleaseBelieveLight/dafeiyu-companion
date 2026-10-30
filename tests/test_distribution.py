@@ -17,6 +17,15 @@ class DistributionTests(unittest.TestCase):
     def test_public_source_has_no_live_credentials_or_runtime_data(self):
         self.assertEqual(check_release.inspect(ROOT), [])
 
+    def test_documentation_and_runtime_inputs_are_included_in_source_export(self):
+        exported = set(check_release.source_files(ROOT))
+        for folder in ("docs", "content"):
+            with self.subTest(folder=folder):
+                documents = set((ROOT / folder).rglob("*.md"))
+                self.assertTrue(documents)
+                self.assertTrue(documents.issubset(exported))
+        self.assertNotIn(ROOT / "AGENTS.md", exported)
+
     def test_archive_tree_ignores_commit_root_name(self):
         with tempfile.TemporaryDirectory() as folder:
             archives = []

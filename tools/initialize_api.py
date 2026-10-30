@@ -19,6 +19,7 @@ except OSError:
     print("API setup is already running", flush=True)
     sys.exit(0)
 SOURCE = SOURCE_ROOT / "content"
+KNOWLEDGE = SOURCE / "knowledge"
 settings = json.loads((ROOT / "config/settings.json").read_text(encoding="utf-8-sig"))
 credentials = json.loads((ROOT / "config/local-access.json").read_text(encoding="utf-8-sig"))
 client = httpx.Client(base_url="http://127.0.0.1:6185/api/v1", timeout=180, trust_env=False)
@@ -83,7 +84,7 @@ if not settings.get("deepseek_api_key", "").strip():
     sys.exit(0)
 
 knowledge = items(api("GET", "/knowledge-bases"))
-for name, filename in [("大肥鱼手册", "指令手册.md"), ("热梗词典", "知识库-热梗词典示例.md")]:
+for name, filename in [("大肥鱼手册", "指令手册.md"), ("热梗词典", "热梗词典.md")]:
     kb = next((k for k in knowledge if k.get("kb_name", k.get("name")) == name), None)
     if kb is None:
         kb = api(
@@ -101,7 +102,7 @@ for name, filename in [("大肥鱼手册", "指令手册.md"), ("热梗词典", 
         raise RuntimeError("Knowledge base identifier missing: " + str(kb))
     documents = items(api("GET", f"/knowledge-bases/{kb_id}/documents"))
     if not documents:
-        with (SOURCE / "docs" / filename).open("rb") as document:
+        with (KNOWLEDGE / filename).open("rb") as document:
             uploaded = api(
                 "POST",
                 f"/knowledge-bases/{kb_id}/documents",

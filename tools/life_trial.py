@@ -246,7 +246,7 @@ def main(argv=None):
         if args.action == "enable":
             result = enable_trial(client)
         elif args.action == "prepare":
-            path = SOURCE_ROOT / "content/docs/自主生活阶段3交付说明.md"
+            path = SOURCE_ROOT / "content/自主生活验收资料.md"
             text = path.read_text(encoding="utf-8")[:2000]
             result = client.trial("prepare", source_name=str(path.relative_to(SOURCE_ROOT)),
                                    source_text=text)

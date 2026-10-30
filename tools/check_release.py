@@ -12,6 +12,7 @@ PUBLIC_DIRS = {
     "tools",
     "plugins",
     "overlays",
+    "docs",
     "content",
     "assets",
     "requirements",
