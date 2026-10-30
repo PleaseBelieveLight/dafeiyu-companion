@@ -14,9 +14,10 @@ from .activity_state import SHANGHAI
 from .delivery import DeliveryGate, quiet_now
 from .memory_bridge import MemoryBridge
 from .state import PLUGIN_NAME, LifeStore, StateError
+from .trial import TrialControl
 
 
-@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活目标选择与有界资料研究，默认关闭", "0.4.0")
+@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活有界执行与限频验收，默认关闭", "0.5.0")
 class LifeContinuityPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -26,8 +27,13 @@ class LifeContinuityPlugin(Star):
         self._memory = None
         self.engine = None
         self.delivery = None
+        self.trial = TrialControl(self)
 
     async def initialize(self):
+        register_api = getattr(self.context, "register_web_api", None)
+        if callable(register_api):
+            register_api("/astrbot_plugin_life_continuity/trial", self.trial.web,
+                         ["POST"], "本机已登录管理端的显式单次验收；不运行周期")
         if self.config.get("enabled") is not True or self.store is not None:
             return
         try:
@@ -49,11 +55,14 @@ class LifeContinuityPlugin(Star):
         if self.store is not None:
             stopped = await self.engine.close() if self.engine is not None else True
             delivered = await self.delivery.close() if self.delivery is not None else True
-            if not stopped or not delivered:
-                logger.warning("[life_continuity] 在途调用尚未结束，保留执行租约及数据库连接。")
+            memorized = await self._memory.close() if self._memory is not None else True
+            if not stopped or not delivered or not memorized:
+                logger.warning("[life_continuity] 在途调用尚未结束，保留相关资源及数据库连接。")
                 pending = {task for task in (self.engine.task, self.engine.work)
                            if task is not None and not task.done()}
                 pending.update(self.delivery.pending)
+                if self._memory is not None:
+                    pending.update(self._memory.tasks)
                 store = self.store
 
                 def close_when_idle(task):

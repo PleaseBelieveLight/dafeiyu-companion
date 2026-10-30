@@ -110,6 +110,20 @@ async def run_native(context, event, prompt, before, after, config, stop, on_run
                     "不代表主人的喜好，也不能作为放弃或完成目标的授权。")
     payload = await _native(context, event, prompt, before, after, config, stop, on_runner,
                             instructions)
+    return validate_research(payload)
+
+
+def validate_research(payload):
+    """Keep strict fields, accepting a bounded list of questions without losing content."""
+    if not isinstance(payload, dict):
+        raise ValueError("研究输出不是对象。")
+    payload = dict(payload)
+    questions = payload.get("questions")
+    if isinstance(questions, list):
+        if (not 1 <= len(questions) <= 8 or any(not isinstance(item, str)
+                or not item.strip() or len(item) > 1000 for item in questions)):
+            raise ValueError("待核实问题列表无效或超长。")
+        payload["questions"] = "\n".join("- " + item.strip() for item in questions)
     for key in ("note", "questions", "next_step"):
         if not isinstance(payload.get(key), str) or not payload[key].strip():
             raise ValueError("研究输出缺少必要文字。")

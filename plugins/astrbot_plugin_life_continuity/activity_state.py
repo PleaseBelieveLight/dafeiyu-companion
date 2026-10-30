@@ -56,6 +56,8 @@ class BudgetExceeded(StateError):
 
 
 def limits(config):
+    if type(config.get("trial_mode", False)) is not bool:
+        raise ValueError("invalid trial mode")
     result = {}
     for key, default in DEFAULTS.items():
         value = config.get(key, default)
@@ -64,6 +66,12 @@ def limits(config):
         if type(value) is not int or not minimum <= value <= 3600:
             raise ValueError(f"invalid activity limit: {key}")
         result[key] = value
+    if config.get("trial_mode") is True:
+        for key, maximum in DEFAULTS.items():
+            if key == "chat_cooldown_seconds":
+                result[key] = max(result[key], maximum)
+            else:
+                result[key] = min(result[key], maximum)
     return result
 
 
@@ -109,10 +117,16 @@ class ActivityLedger:
                                 (scope, day)).fetchone()[0]
         shares = self.db.execute("SELECT COUNT(*) FROM life_deliveries WHERE scope=? AND day=?",
                                  (scope, day)).fetchone()[0]
+        midnight = day_at(now)[1]
+        runs = self.db.execute("""SELECT COUNT(*) FROM activity_sessions
+            WHERE scope=? AND started>=? AND started<?""",
+            (scope, midnight - 86400, midnight)).fetchone()[0]
         return {"day": day, "reserved_or_used_seconds": used, "model_calls": calls,
                 "shares": shares, "remaining_seconds": max(0, cfg["daily_minutes"] * 60 - used),
                 "remaining_model_calls": max(0, cfg["daily_model_calls"] - calls),
                 "remaining_shares": max(0, cfg["daily_shares"] - shares),
+                "started_rounds": runs,
+                "daily_round_limit": 1 if config.get("trial_mode") else None,
                 "control": self.control(scope)}
 
     def sources(self, scope, goal_id):
@@ -130,6 +144,8 @@ class ActivityLedger:
             control = self.control(scope)
             if control["paused"] or now - control["last_chat"] < cfg["chat_cooldown_seconds"]:
                 raise StateError("后台已暂停或仍在聊天冷却期。")
+            if config.get("trial_mode") is True and self.snapshot(scope, config)["started_rounds"]:
+                raise BudgetExceeded("试运行当天已开始过一轮，失败、中断和重启都不退还该名额。")
             goal = self.store.get_goal(scope, goal_id)
             if not goal or (goal["status"] not in {"ready", "paused", "shelved"}):
                 raise StateError("目标尚不可运行；手动暂停需明确继续，待核实状态需先恢复核对。")

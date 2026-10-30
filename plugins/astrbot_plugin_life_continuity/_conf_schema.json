@@ -24,6 +24,11 @@
     "type": "bool",
     "default": false
   },
+  "trial_mode": {
+    "description": "阶段五严格限频：上海日期每日最多开始一轮，预算与分享不高于默认上限；不启用周期",
+    "type": "bool",
+    "default": false
+  },
   "daily_minutes": {"description": "每日后台活动分钟上限", "type": "int", "default": 10},
   "max_run_seconds": {"description": "单轮活动秒数上限；首轮同时受模型超时上限约束", "type": "int", "default": 300},
   "max_model_calls_per_run": {"description": "单轮模型调用上限", "type": "int", "default": 10},

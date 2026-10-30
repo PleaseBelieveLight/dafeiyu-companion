@@ -5,6 +5,8 @@ import json
 import re
 import sys
 
+from .state import StateError
+
 
 def _result(value):
     if not isinstance(value, (str, dict)):
@@ -24,6 +26,25 @@ class MemoryBridge:
         self.store, self.get_tool, self.make_wrapper = store, get_tool, make_wrapper
         self.timeout = timeout
         self.inflight = set()
+        self.tasks, self.closing = set(), False
+
+    def _track(self):
+        if self.closing:
+            raise StateError("记忆桥接正在关闭，未开始新调用。")
+        task = asyncio.current_task()
+        self.tasks.add(task)
+        return task
+
+    async def close(self, timeout=5):
+        self.closing = True
+        tasks = {task for task in self.tasks
+                 if task is not asyncio.current_task() and not task.done()}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            return not pending
+        return True
 
     def capability(self, name, event):
         try:
@@ -62,6 +83,13 @@ class MemoryBridge:
                 "reason": reason}
 
     async def export(self, event, episode_id):
+        task = self._track()
+        try:
+            return await self._export_once(event, episode_id)
+        finally:
+            self.tasks.discard(task)
+
+    async def _export_once(self, event, episode_id):
         key = (event.unified_msg_origin, episode_id)
         if key in self.inflight:
             return self.public(self.store.memory_export(*key), reason="call_in_progress")
@@ -128,7 +156,16 @@ class MemoryBridge:
         result["source_current"] = self.store.get_episode(scope, episode_id) is not None
         return result
 
-    async def recall(self, event, query):
+    async def recall(self, event, query, *, timeout=None):
+        if timeout is not None and (type(timeout) is not int or not 1 <= timeout <= 30):
+            raise ValueError("invalid recall timeout")
+        task = self._track()
+        try:
+            return await self._recall(event, query, timeout=timeout)
+        finally:
+            self.tasks.discard(task)
+
+    async def _recall(self, event, query, *, timeout=None):
         scope = event.unified_msg_origin
         fallback = self.store.query_episodes(scope, query, limit=5)
         result = {"status": "unavailable", "matches": [], "local_episodes": fallback,
@@ -137,7 +174,7 @@ class MemoryBridge:
         if tool is None:
             return result
         try:
-            async with asyncio.timeout(self.timeout):
+            async with asyncio.timeout(timeout if timeout is not None else self.timeout):
                 reply = _result(await tool.call(self.make_wrapper(event), query=query, k=5,
                                                 include_source=False))
             isolated = reply.get("applied_filters", {}).get("session_filtered") is True

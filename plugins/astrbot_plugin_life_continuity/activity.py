@@ -123,6 +123,7 @@ class ActivityEngine:
                 return job
             self.job = job
             job["candidates"] = candidates
+            self.runner = None
             self.stop_signal, self.reason, self.manual = asyncio.Event(), "", False
             self.task = asyncio.create_task(self._supervise(event, job))
             self.task.add_done_callback(self._observe)

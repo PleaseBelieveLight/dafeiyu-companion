@@ -356,6 +356,24 @@ class MemoryBridgeTests(unittest.IsolatedAsyncioTestCase):
             await self.bridge.export(self.event, self.episode["id"])
         self.assertEqual(self.store.memory_export(SCOPE, self.episode["id"])["status"], "uncertain")
 
+    async def test_close_settles_cancelled_memory_work_before_database_can_close(self):
+        started = asyncio.Event()
+
+        async def waiting(*args, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        self.write.call.side_effect = waiting
+        task = asyncio.create_task(self.bridge.export(self.event, self.episode["id"]))
+        await started.wait()
+        self.assertTrue(await self.bridge.close(timeout=0.1))
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(self.store.memory_export(SCOPE, self.episode["id"])["status"], "uncertain")
+        self.assertEqual(self.bridge.tasks, set())
+        with self.assertRaises(StateError):
+            await self.bridge.export(self.event, self.episode["id"])
+
     async def test_confirmed_not_written_can_retry_only_on_explicit_export(self):
         self.write.call.return_value = {"memorized": False, "error": "memory access is not allowed"}
         result = await self.bridge.export(self.event, self.episode["id"])

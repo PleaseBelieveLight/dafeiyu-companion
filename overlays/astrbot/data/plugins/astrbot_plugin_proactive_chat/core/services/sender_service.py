@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Modified for the Dafeiyu Windows distribution on 2026-10-29.
-# Changes: contextual speech and shared, single-attempt life delivery.
+# Modified for the Dafeiyu Windows distribution on 2026-10-30.
+# Changes: contextual speech, shared life delivery and private trial diagnostics.
 """发送与装饰钩子服务。
 
 由旧 core/message_sender.py 等价搬迁而来；分段、装饰、TTS 与
@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import math
 import random
 import re
@@ -67,6 +69,55 @@ class SenderService:
 
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
+        register = getattr(getattr(plugin, "context", None), "register_web_api", None)
+        if callable(register):
+            register("/astrbot_plugin_proactive_chat/life-diagnostics", self.life_diagnostics,
+                     ["POST"], "本机登录管理员的试运行输出结构诊断，不返回模型原文")
+
+    async def life_diagnostics(self):
+        from astrbot.api.web import request
+        if not request.username or request.client_host not in {"127.0.0.1", "::1"}:
+            return {"status": "error", "message": "local dashboard login required"}
+        metadata = self.plugin.context.get_registered_star("astrbot_plugin_life_continuity")
+        life = getattr(metadata, "star_cls", None)
+        if life is None or life.config.get("trial_mode") is not True:
+            return {"status": "error", "message": "trial mode is closed"}
+        runner = getattr(life.engine, "runner", None)
+        response = runner.get_final_llm_resp() if runner is not None else None
+        if response is None:
+            return {"status": "ok", "data": {"response_available": False}}
+        raw = response.completion_text.strip()
+        if raw.startswith("```json\n") and raw.endswith("```"):
+            raw = raw[8:-3].strip()
+        try:
+            payload = json.loads(raw) if len(raw) <= 16000 else None
+        except ValueError:
+            payload = None
+        shape = {"response_available": True, "json_type": type(payload).__name__,
+                 "completion_chars": len(raw)}
+        if isinstance(payload, dict):
+            shape["fields"] = {key: {"type": type(payload.get(key)).__name__,
+                "length": len(payload[key]) if isinstance(payload.get(key), (str, list)) else None}
+                for key in ("note", "questions", "next_step", "source_ids", "interest")}
+        body = await request.json()
+        if isinstance(body, dict) and body.get("capture") is True:
+            job = life.engine.job
+            if (not job or not str(job.get("trigger", "")).startswith("phase5:run:")
+                    or life.engine.task is None or not life.engine.task.done()):
+                return {"status": "error", "message": "no settled acceptance run"}
+            folder = Path(life.store.folder) / "acceptance_diagnostics"
+            folder.mkdir(exist_ok=True)
+            path = folder / (job["run_id"] + ".json")
+            capture = {"run_id": job["run_id"], "goal_id": job["goal_id"],
+                       "goal_version": job["version"], "read_ranges": job.get("read_ranges", {}),
+                       "completion_text": raw,
+                       "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest()}
+            if not path.exists():
+                with path.open("x", encoding="utf-8") as stream:
+                    json.dump(capture, stream, ensure_ascii=False, indent=2)
+            shape["private_capture_saved"] = True
+            shape["run_id"] = job["run_id"]
+        return {"status": "ok", "data": shape}
 
     # ------------------------------------------------------------------
     # 文本分段
