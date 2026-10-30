@@ -138,7 +138,8 @@ class LifeStateTests(unittest.TestCase):
         self.assertEqual(read_snapshot(self.folder, scope=SCOPE)["runs"][0]["status"], "running")
 
     def test_second_run_failure_rolls_back_goal_transition(self):
-        first, second = self.goal(), self.goal(source_id="second")
+        first = self.goal()
+        second = self.store.create_goal(SCOPE, "second", "另一个研究目标", "理由", "条件", "下一步")
         self.store.start_run(SCOPE, first["id"], 1, "first-trigger")
         with self.assertRaises(sqlite3.IntegrityError):
             self.store.start_run(SCOPE, second["id"], 1, "second-trigger")

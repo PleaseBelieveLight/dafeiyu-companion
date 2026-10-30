@@ -16,7 +16,7 @@ from .memory_bridge import MemoryBridge
 from .state import PLUGIN_NAME, LifeStore, StateError
 
 
-@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活有界资料研究，默认关闭", "0.3.0")
+@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活目标选择与有界资料研究，默认关闭", "0.4.0")
 class LifeContinuityPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -189,8 +189,11 @@ class LifeContinuityPlugin(Star):
 
     async def command_reply(self, event, text, command):
         action = command["action"]
-        if action in {"new", "source", "run", "status", "stop", "allow", "recover"}:
+        if action in {"new", "source", "run", "pick", "status", "stop", "allow", "recover"}:
             return await self.activity_command(event, command)
+        if action in {"candidates", "interests", "shelve", "abandon", "complete", "reopen",
+                      "prefer"}:
+            return await self.goal_command(event, command)
         if action in {"pause", "resume", "cancel", "adjust", "correct"}:
             if not await self.engine.stop("owner_adjustment", manual=True):
                 raise StateError("在途调用尚未结束，未调整目标。")
@@ -225,7 +228,7 @@ class LifeContinuityPlugin(Star):
             values = command["fields"]
             goal = self.store.create_goal(scope, "owner-goal:" + identity, *values,
                                           owner_kind="user")
-            return f"已保存目标：{goal['title']}\nID：{goal['id']}\n尚未开始活动。"
+            return f"目标已记录或复用同主题记录：{goal['title']}\nID：{goal['id']}\n状态：{goal['status']}"
         if action == "source":
             goal = self.chat.resolve_goal(scope, command["target"])
             row = self.store.record_episode(scope, goal["id"], "owner-source:" + identity,
@@ -245,10 +248,36 @@ class LifeContinuityPlugin(Star):
         if action == "recover":
             count = self.engine.recover(scope)
             return f"已核对 {count} 条中断运行。未知发送不重试，暂停目标需明确继续。"
-        goal = self.chat.resolve_goal(scope, command["target"])
-        result = self.engine.start(event, goal["id"], "owner-run:" + identity)
+        goal = self.chat.resolve_goal(scope, command["target"]) if action == "run" else None
+        result = self.engine.start(event, goal["id"] if goal else None, "owner-run:" + identity)
+        if result["status"] == "waiting":
+            return "当前没有符合条件的候选，先等待新资料或明确指引，没有调用模型。"
         return ("这次触发已有记录，未重复启动。" if result["duplicate"] else
-                f"已开始一个有时限的资料研究步骤。\n运行ID：{result['run_id']}")
+                f"已开始一个有时限的选择或研究步骤。\n运行ID：{result['run_id']}")
+
+    async def goal_command(self, event, command):
+        scope, action = event.unified_msg_origin, command["action"]
+        policy, now = self.engine.ledger.goals, self.engine.ledger.clock()
+        if action == "candidates":
+            last = self.store.db.execute("""SELECT goal_id,reason,created FROM goal_choices
+                WHERE scope=? ORDER BY created DESC LIMIT 3""", (scope,)).fetchall()
+            return json.dumps({"candidates": policy.candidates(scope, now),
+                               "recent_choices": [dict(row) for row in last]}, ensure_ascii=False)
+        goal = self.chat.resolve_goal(scope, command["target"])
+        if action == "interests":
+            return json.dumps({"goal_id": goal["id"], "interests": policy.interests(scope,
+                goal["id"], now), "lifecycle": policy.profile(scope, goal["id"])},
+                ensure_ascii=False)
+        if not await self.engine.stop("owner_review", manual=True):
+            raise StateError("在途调用尚未结束，未评议目标。")
+        # Stop may settle the active round and change the version.
+        goal = self.store.get_goal(scope, goal["id"])
+        identity = getattr(event.message_obj, "message_id", None)
+        if identity is None or type(identity) is bool or not str(identity).strip():
+            raise StateError("消息缺少真实标识。")
+        result = policy.review(scope, goal["id"], str(event.get_sender_id()), str(identity),
+                               action, command["payload"], goal["version"], now)
+        return json.dumps(result, ensure_ascii=False)
 
     @filter.llm_tool(name="life_recall")
     async def recall(self, event: AstrMessageEvent, query: str = "", goal_id: str = ""):

@@ -15,7 +15,7 @@
     "default": false
   },
   "activity_enabled": {
-    "description": "允许主人手动触发有时限的资料研究（不启用周期）",
+    "description": "允许主人单次触发目标选择或有时限的资料研究（不启用周期）",
     "type": "bool",
     "default": false
   },

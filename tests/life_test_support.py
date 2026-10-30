@@ -7,6 +7,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 
+def remove_selection_schema(store):
+    """Restore a genuine pre-v4 fixture, rather than only lowering user_version."""
+    for table in ("goal_reviews", "goal_choices", "interest_evidence", "goal_attempts",
+                  "goal_profiles"):
+        store.db.execute(f"DROP TABLE {table}")
+
+
 class Plain:
     def __init__(self, text):
         self.text = text

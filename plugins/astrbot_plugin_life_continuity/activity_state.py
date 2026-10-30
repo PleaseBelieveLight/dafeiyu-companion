@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .state import ConflictError, StateError, _json, _row, _text
+from .selection_state import GoalPolicy, research_sources
 
 try:
     SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -83,6 +84,7 @@ def time_chunks(start, end):
 class ActivityLedger:
     def __init__(self, store, clock=time.time):
         self.store, self.db, self.clock = store, store.db, clock
+        self.goals = GoalPolicy(store)
 
     def control(self, scope):
         row = self.db.execute("SELECT * FROM activity_control WHERE scope=?", (scope,)).fetchone()
@@ -114,12 +116,9 @@ class ActivityLedger:
                 "control": self.control(scope)}
 
     def sources(self, scope, goal_id):
-        return [row for row in self.store.query_episodes(scope, goal_id=goal_id, limit=20)
-                if row["kind"] in {"source", "read", "owner_correction"}
-                and isinstance(row["evidence"].get("text"), str)
-                and row["evidence"]["text"].strip()][:3]
+        return research_sources(self.store, scope, goal_id)
 
-    def begin(self, scope, goal_id, source_id, config):
+    def begin(self, scope, goal_id, source_id, config, *, selection=False):
         cfg, now = limits(config), self.clock()
         with self.store.transaction():
             old = self.db.execute("SELECT * FROM runs WHERE scope=? AND source_id=?",
@@ -132,14 +131,13 @@ class ActivityLedger:
             if control["paused"] or now - control["last_chat"] < cfg["chat_cooldown_seconds"]:
                 raise StateError("后台已暂停或仍在聊天冷却期。")
             goal = self.store.get_goal(scope, goal_id)
-            if not goal or not (goal["status"] == "ready" or (
-                goal["status"] == "paused"
-                and goal["checkpoint"].get("resume_policy") == "read_only"
-            )):
+            if not goal or (goal["status"] not in {"ready", "paused", "shelved"}):
                 raise StateError("目标尚不可运行；手动暂停需明确继续，待核实状态需先恢复核对。")
             sources = self.sources(scope, goal_id)
             if not sources:
                 raise StateError("没有可读取的资料，请先提供该目标的文字来源。")
+            if not self.goals.eligible(goal, now):
+                raise StateError("目标已暂停或搁置，尚不满足重新开启条件。")
             if self.snapshot(scope, config)["remaining_model_calls"] <= 0:
                 raise BudgetExceeded("当天模型调用额度已耗尽。")
             cursor, chunks = now, []
@@ -166,9 +164,47 @@ class ActivityLedger:
                                 [(scope, run_id, day, seconds) for day, seconds in chunks])
             self.db.execute("""UPDATE goals SET status='running',version=version+1,updated_at=?
                 WHERE scope=? AND id=?""", (now, scope, goal_id))
+            if not selection:
+                self.goals.record_choice(scope, source_id, goal_id, run_id, "主人明确指定目标",
+                                         [{"id": goal_id, "version": goal["version"]}], now)
             return {"run_id": run_id, "scope": scope, "goal_id": goal_id,
                     "version": goal["version"] + 1, "duration": cursor - now, "started": now,
-                    "goal": goal, "sources": sources, "limits": cfg, "duplicate": False}
+                    "goal": goal, "sources": sources, "limits": cfg, "duplicate": False,
+                    "trigger": source_id}
+
+    def select(self, job, candidates, decision):
+        identity = decision.get("goal_id")
+        reason = _text(decision.get("reason"), "choice reason", 500)
+        ids = {row["id"]: row for row in candidates}
+        if not isinstance(identity, str) or (identity and identity not in ids):
+            raise StateError("模型选择了候选外目标，未执行。")
+        scope, now = job["scope"], self.clock()
+        updated = {}
+        with self.store.transaction():
+            anchor = self.store.get_goal(scope, job["goal_id"])
+            if anchor["status"] != "running" or anchor["version"] != job["version"]:
+                raise ConflictError("selection reservation changed")
+            if identity and identity != anchor["id"]:
+                goal = self.store.get_goal(scope, identity)
+                if (not goal or goal["version"] != ids[identity]["version"]
+                        or not self.goals.eligible(goal, now)):
+                    raise ConflictError("selected goal changed")
+                self.db.execute("""UPDATE goals SET status=?,version=version+1,updated_at=?
+                    WHERE scope=? AND id=?""", (job["goal"]["status"], now, scope, anchor["id"]))
+                self.db.execute("UPDATE runs SET goal_id=? WHERE scope=? AND id=?",
+                                (identity, scope, job["run_id"]))
+                self.db.execute("""UPDATE goals SET status='running',version=version+1,
+                    updated_at=? WHERE scope=? AND id=?""", (now, scope, identity))
+                updated = {"goal_id": identity, "goal": goal, "version": goal["version"] + 1,
+                           "sources": self.sources(scope, identity)}
+            elif identity:
+                # A source correction during selection must not be silently replaced.
+                if any(not self.store.get_episode(scope, row["id"]) for row in job["sources"]):
+                    raise ConflictError("selection sources changed")
+            self.goals.record_choice(scope, job["trigger"], identity or None, job["run_id"],
+                                     reason, candidates, now, mode="selection")
+        job.update(updated)
+        return bool(identity)
 
     def charge_model(self, scope, run_id, config):
         cfg, now = limits(config), self.clock()
@@ -200,7 +236,7 @@ class ActivityLedger:
                             (_json(usage), identity))
 
     def finish(self, job, reason, elapsed, *, note=None, source_ids=None, next_step=None,
-               manual=False):
+               manual=False, interest=0):
         now, scope, run_id = self.clock(), job["scope"], job["run_id"]
         with self.store.transaction():
             run = self.db.execute("SELECT * FROM runs WHERE scope=? AND id=?",
@@ -211,6 +247,7 @@ class ActivityLedger:
             if goal["version"] != job["version"] or goal["status"] != "running":
                 raise ConflictError("goal changed during the activity")
             checkpoint = dict(goal["checkpoint"])
+            assessment = None
             if note is not None:
                 note = _text(note, "note", 12000)
                 next_step = _text(next_step, "next step")
@@ -225,11 +262,16 @@ class ActivityLedger:
                                 (scope, goal["id"], version, note, _json(source_ids, list), now))
                 checkpoint.update(note_version=version, source_ids=source_ids,
                                   read_ranges=job.get("read_ranges", {}))
+                assessment = self.goals.on_step(job, source_ids, interest, now)
             checkpoint.update(last_run_id=run_id, pause_reason=reason,
                               resume_policy="manual" if manual else "read_only")
-            self.db.execute("""UPDATE goals SET status='paused',next_step=?,checkpoint_json=?,
+            status = "paused"
+            if assessment:
+                status = assessment.pop("status")
+                checkpoint.update(assessment)
+            self.db.execute("""UPDATE goals SET status=?,next_step=?,checkpoint_json=?,
                 version=version+1,updated_at=? WHERE scope=? AND id=?""",
-                (next_step if note is not None else goal["next_step"], _json(checkpoint),
+                (status, next_step if note is not None else goal["next_step"], _json(checkpoint),
                  now, scope, goal["id"]))
             self.db.execute("UPDATE runs SET status=?,ended_at=?,summary=? WHERE id=?", (
                 "completed" if note is not None else "interrupted", now, reason, run_id,

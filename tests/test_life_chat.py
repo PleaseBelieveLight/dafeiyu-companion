@@ -19,7 +19,7 @@ from astrbot_plugin_life_continuity.state import (
     APPLICATION_ID, CHAT_SCHEMA, SCHEMA_VERSION, ConflictError, LifeStore, StateError,
     read_snapshot,
 )
-from life_test_support import FakeEvent, load_plugin
+from life_test_support import FakeEvent, load_plugin, remove_selection_schema
 
 SCOPE, OTHER = "test:FriendMessage:1001", "test:FriendMessage:1002"
 
@@ -135,6 +135,7 @@ class ChatStateTests(unittest.TestCase):
 class ChatMigrationTests(unittest.TestCase):
     @staticmethod
     def restore_v1_fixture(store):
+        remove_selection_schema(store)
         for table in ("activity_calls", "activity_time", "activity_sessions",
                       "activity_control", "life_deliveries", "chat_events", "memory_exports"):
             store.db.execute(f"DROP TABLE {table}")

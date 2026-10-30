@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 
 from .state import ConflictError, StateError, _row
 
@@ -38,11 +39,30 @@ def parse_command(text):
         raise ValueError("自主生活命令最多2000字。")
     if text == "/life" or text == "/life list":
         return {"action": "list"}
-    if text in {"/life status", "/life stop", "/life allow", "/life recover"}:
+    if text in {"/life status", "/life stop", "/life allow", "/life recover", "/life pick",
+                "/life candidates"}:
         return {"action": text.split()[1]}
     if text.startswith("/life "):
         parts = text.split(maxsplit=2)
         action = parts[1]
+        if action == "interests" and len(parts) == 3:
+            return {"action": action, "target": parts[2].strip()}
+        if action in {"shelve", "abandon", "complete", "reopen", "prefer"} and len(parts) == 3:
+            fields = [value.strip() for value in parts[2].split(" | ")]
+            count = 4 if action == "complete" else 3 if action == "prefer" else 2
+            if len(fields) != count or not all(fields):
+                raise ValueError("评议需：目标ID | 理由；complete 需：目标ID | 结束条件原文 | "
+                                 "经历ID列表 | 依据；prefer 需：目标ID | 喜欢或不喜欢 | 原话")
+            payload = {"reason": fields[-1]}
+            if action == "complete":
+                payload.update(criteria=fields[1], source_ids=[value.strip()
+                    for value in fields[2].split(",") if value.strip()])
+            if action == "prefer":
+                stance = {"喜欢": 1, "不喜欢": -1}.get(fields[1])
+                if stance is None:
+                    raise ValueError("偏好只能明确填写喜欢或不喜欢。")
+                payload["stance"] = stance
+            return {"action": action, "target": fields[0], "payload": payload}
         if action == "new" and len(parts) == 3:
             values = [value.strip() for value in parts[2].split(" | ")]
             if len(values) != 4 or not all(values):
@@ -64,7 +84,8 @@ def parse_command(text):
             if action in {"adjust", "feedback", "correct"} and not separator:
                 raise ValueError("请使用 /life 动作 目标ID | 内容")
             return {"action": action, "target": target.strip(), "content": content.strip()}
-        raise ValueError("支持 /life new、source、run、status、stop、allow、recover、list、"
+        raise ValueError("支持 /life pick、candidates、interests、shelve、abandon、complete、"
+                         "reopen、prefer、new、source、run、status、stop、allow、recover、list、"
                          "pause、resume、cancel、adjust、feedback、correct、remember、recall")
     match = re.fullmatch(r"(暂停|继续|取消)这个目标[。！!]?", text)
     if match:
@@ -88,7 +109,8 @@ class LifeChat:
     def goals(self, scope):
         return [_row(row) for row in self.store.db.execute(
             "SELECT * FROM goals WHERE scope=? "
-            "ORDER BY status IN ('completed','cancelled'),updated_at DESC,id LIMIT 20", (scope,)
+            "ORDER BY status IN ('completed','cancelled','abandoned'),updated_at DESC,id LIMIT 20",
+            (scope,)
         )]
 
     def resolve_goal(self, scope, target):
@@ -98,7 +120,7 @@ class LifeChat:
                 return exact
         goals = self.goals(scope)
         matches = [goal for goal in goals if target in {goal["id"], goal["title"]}] if target else [
-            goal for goal in goals if goal["status"] not in {"completed", "cancelled"}
+            goal for goal in goals if goal["status"] not in {"completed", "cancelled", "abandoned"}
         ]
         if len(matches) != 1:
             raise StateError("目标不明确，请先 /life list，再用完整目标 ID 指定。")
@@ -140,7 +162,8 @@ class LifeChat:
                 return "当前没有保存的自主目标。"
             labels = {"ready": "可继续", "running": "运行未结算", "paused": "已暂停",
                       "waiting_approval": "等待答复", "blocked": "待核实",
-                      "completed": "已完成", "cancelled": "已取消"}
+                      "completed": "已完成", "cancelled": "已取消", "shelved": "已搁置",
+                      "abandoned": "已放弃"}
             return "当前目标：\n" + "\n".join(
                 f"{goal['title']}（{labels.get(goal['status'], goal['status'])}）\n"
                 f"ID：{goal['id']}\n下一步：{goal['next_step']}" for goal in goals
@@ -173,6 +196,8 @@ class LifeChat:
         )
 
     def context(self, scope):
+        from .selection_state import GoalPolicy
+        policy = GoalPolicy(self.store)
         goals = self.goals(scope)[:3]
         episodes = self.store.query_episodes(scope, limit=5)
         notes = []
@@ -197,9 +222,16 @@ class LifeChat:
                                                         ensure_ascii=False)[:200]}
                          for row in episodes],
             "notes": notes,
+            "decisions": [dict(row) for row in self.store.db.execute("""SELECT goal_id,
+                substr(reason,1,250) AS reason,created FROM goal_choices WHERE scope=?
+                ORDER BY created DESC LIMIT 3""", (scope,))],
         }
         # Bound arbitrary checkpoint values as well as the number of records.
         for goal in payload["goals"]:
+            profile = policy.profile(scope, goal["id"])
+            goal["lifecycle"] = {key: profile[key] for key in
+                                 ("streak", "review_at", "condition", "reason")}
+            goal["interests"] = policy.interests(scope, goal["id"], time.time())
             goal["checkpoint"] = json.dumps(goal["checkpoint"], ensure_ascii=False)[:400]
             for key in ("why", "next_step", "completion_criteria"):
                 goal[key] = goal[key][:250]

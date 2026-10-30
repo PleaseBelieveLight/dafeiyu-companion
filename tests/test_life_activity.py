@@ -23,8 +23,10 @@ from astrbot_plugin_life_continuity.activity_state import (
 )
 from astrbot_plugin_life_continuity.delivery import DeliveryGate, quiet_now
 from astrbot_plugin_life_continuity.native_agent import MeteredProvider
-from astrbot_plugin_life_continuity.state import ConflictError, LifeStore, StateError, read_snapshot
-from life_test_support import FakeEvent, load_plugin
+from astrbot_plugin_life_continuity.state import (
+    SCHEMA_VERSION, ConflictError, LifeStore, StateError, read_snapshot,
+)
+from life_test_support import FakeEvent, load_plugin, remove_selection_schema
 
 SCOPE = "test:FriendMessage:1001"
 PROACTIVE = ROOT / "overlays/astrbot/data/plugins/astrbot_plugin_proactive_chat"
@@ -489,6 +491,7 @@ class ActivityMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             store = LifeStore(Path(folder))
             goal = store.create_goal(SCOPE, "old", "原目标", "理由", "条件", "下一步")
+            remove_selection_schema(store)
             for table in ("activity_calls", "activity_time", "activity_sessions",
                           "activity_control",
                           "life_deliveries"):
@@ -501,7 +504,7 @@ class ActivityMigrationTests(unittest.TestCase):
                 self.assertEqual(upgraded.get_goal(SCOPE, goal["id"])["title"], "原目标")
                 with closing(sqlite3.connect(upgraded.schema_backup)) as backup:
                     self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 2)
-                self.assertEqual(read_snapshot(Path(folder))["schema_version"], 3)
+                self.assertEqual(read_snapshot(Path(folder))["schema_version"], SCHEMA_VERSION)
             finally:
                 upgraded.close()
 
@@ -509,6 +512,7 @@ class ActivityMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             store = LifeStore(Path(folder))
             store.create_goal(SCOPE, "old", "原目标", "理由", "条件", "下一步")
+            remove_selection_schema(store)
             for table in ("activity_calls", "activity_time", "activity_sessions",
                           "activity_control",
                           "life_deliveries"):

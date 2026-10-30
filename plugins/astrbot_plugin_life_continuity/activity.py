@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 
 from .activity_state import ActivityLedger, limits
-from .native_agent import run_native
-from .state import StateError
+from .native_agent import choose_native, run_native
+from .state import ConflictError, StateError
 
 
 class ProcessLease:
@@ -44,9 +44,10 @@ class ProcessLease:
 
 class ActivityEngine:
     def __init__(self, store, context, config, policy, *, agent=run_native, share=None,
-                 clock=time.time, monotonic=time.monotonic):
+                 selector=choose_native, clock=time.time, monotonic=time.monotonic):
         self.store, self.context, self.config, self.policy = store, context, config, policy
         self.agent, self.share, self.monotonic = agent, share, monotonic
+        self.selector = selector
         self.ledger, self.lease = ActivityLedger(store, clock), ProcessLease(store.folder)
         self.task, self.work, self.runner, self.job = None, None, None, None
         self.stop_signal, self.reason, self.manual = asyncio.Event(), "", False
@@ -84,11 +85,44 @@ class ActivityEngine:
         try:
             # Owning the OS lock proves there is no old local worker to race.
             self._recover_locked(event.unified_msg_origin)
-            job = self.ledger.begin(event.unified_msg_origin, goal_id, trigger, self.config)
+            scope = event.unified_msg_origin
+            previous = self.ledger.goals.choice(scope, trigger)
+            if previous:
+                mode = "selection" if goal_id is None else "manual"
+                if (previous["request_mode"] != mode
+                        or (goal_id is not None and previous["goal_id"] != goal_id)):
+                    raise ConflictError("trigger already belongs to another choice")
+                self.lease.release()
+                return {"duplicate": True, "run_id": previous["run_id"],
+                        "status": "recorded", "reason": previous["reason"]}
+            old_run = self.store.db.execute("SELECT * FROM runs WHERE scope=? AND source_id=?",
+                                            (scope, trigger)).fetchone()
+            if old_run:
+                if goal_id is not None and old_run["goal_id"] != goal_id:
+                    raise ConflictError("trigger already belongs to another goal")
+                self.lease.release()
+                return {"duplicate": True, "run_id": old_run["id"], "status": old_run["status"]}
+            candidates = None
+            if goal_id is None:
+                candidates = self.ledger.goals.candidates(scope, self.ledger.clock())
+                if not candidates:
+                    with self.store.transaction():
+                        self.ledger.goals.record_choice(scope, trigger, None, None,
+                            "没有符合暂停、来源及搁置条件的候选，等待新资料或明确指引", [],
+                            self.ledger.clock(), mode="selection")
+                    self.lease.release()
+                    return {"status": "waiting", "duplicate": False}
+                if (limits(self.config)["max_model_calls_per_run"] < 2
+                        or self.ledger.snapshot(scope, self.config)["remaining_model_calls"] < 2):
+                    raise StateError("选择并研究至少需预留两次模型额度；可指定目标直接 run。")
+                goal_id = candidates[0]["id"]
+            job = self.ledger.begin(scope, goal_id, trigger, self.config,
+                                    selection=candidates is not None)
             if job["duplicate"]:
                 self.lease.release()
                 return job
             self.job = job
+            job["candidates"] = candidates
             self.stop_signal, self.reason, self.manual = asyncio.Event(), "", False
             self.task = asyncio.create_task(self._supervise(event, job))
             self.task.add_done_callback(self._observe)
@@ -99,6 +133,27 @@ class ActivityEngine:
 
     async def _perform(self, event, job):
         self.permit()
+        researching = False
+
+        def charge():
+            self.permit()
+            identity = self.ledger.charge_model(job["scope"], job["run_id"], self.config)
+            if researching:
+                job["research_called"] = True
+            return identity
+
+        if job.get("candidates") is not None:
+            decision = await self.selector(
+                self.context, event, json.dumps(job["candidates"], ensure_ascii=False),
+                charge, self.ledger.record_usage, job["limits"], self.stop_signal,
+                lambda runner: setattr(self, "runner", runner),
+            )
+            self.permit()
+            if not self.ledger.select(job, job["candidates"], decision):
+                self.ledger.finish(job, "choice_wait", 0)
+                job["settled"] = True
+                return {"waited": True}
+        researching = True
         sources = [{"id": row["id"], "kind": row["kind"],
                     "text": row["evidence"]["text"][:2000],
                     "range_chars": [0, min(len(row["evidence"]["text"]), 2000)],
@@ -111,10 +166,6 @@ class ActivityEngine:
         if previous and all(self.store.get_episode(job["scope"], identity)
                             for identity in json.loads(previous["evidence_ids_json"])):
             note = previous["body"][:2500]
-
-        def charge():
-            self.permit()
-            return self.ledger.charge_model(job["scope"], job["run_id"], self.config)
 
         goal = {key: job["goal"][key] for key in
                 ("id", "title", "why", "completion_criteria", "next_step")}
@@ -132,9 +183,11 @@ class ActivityEngine:
         updated = self.ledger.finish(
             job, "step_completed", 0, note=body,
             source_ids=result["source_ids"], next_step=result["next_step"],
+            interest=result.get("interest", 0),
         )
         job["settled"] = True
-        if self.share is not None and self.config.get("share_enabled") is True:
+        if (self.share is not None and self.config.get("share_enabled") is True
+                and updated["checkpoint"].get("progress") is not False):
             self.permit()
             try:
                 await self.share(event, job, updated, body)
@@ -205,7 +258,8 @@ class ActivityEngine:
         finally:
             if not pending:
                 self.lease.release()
-        return {"status": "completed" if result is not None and reason == "step_completed"
+        return {"status": "waiting" if result and result.get("waited") else
+                "completed" if result is not None and reason == "step_completed"
                 else "interrupted", "reason": reason}
 
     def _release_late(self, task):

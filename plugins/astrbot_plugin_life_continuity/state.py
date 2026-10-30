@@ -18,16 +18,17 @@ from pathlib import Path
 
 PLUGIN_NAME = "astrbot_plugin_life_continuity"
 DATABASE_NAME = "life.sqlite3"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 APPLICATION_ID = 0x44464C31
-GOAL_STATES = {"ready", "running", "paused", "waiting_approval", "blocked",
-               "completed", "cancelled"}
+GOAL_STATES = {"ready", "running", "paused", "waiting_approval", "blocked", "shelved",
+               "completed", "cancelled", "abandoned"}
 TRANSITIONS = {
     "ready": {"ready", "paused", "blocked", "cancelled"},
     "paused": {"paused", "ready", "blocked", "cancelled"},
     "blocked": {"blocked", "paused", "ready", "cancelled"},
     "waiting_approval": {"waiting_approval", "paused", "blocked", "cancelled"},
-    "completed": set(), "cancelled": set(),
+    "shelved": {"shelved", "paused", "ready", "cancelled"},
+    "completed": set(), "cancelled": set(), "abandoned": set(),
 }
 SCHEMA = (
     """CREATE TABLE goals (
@@ -166,6 +167,9 @@ def _inspect_schema(db):
     if version >= 3:
         from .activity_state import ACTIVITY_COLUMNS
         columns = dict(columns, **ACTIVITY_COLUMNS)
+    if version >= 4:
+        from .selection_state import SELECTION_COLUMNS
+        columns = dict(columns, **SELECTION_COLUMNS)
     for table, required in columns.items():
         actual = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
         if not required.issubset(actual):
@@ -173,6 +177,12 @@ def _inspect_schema(db):
     indexes = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     if not {"goals_scope_status", "one_running_run", "episodes_goal_time"}.issubset(indexes):
         raise StateError("incomplete life database indexes")
+    if version >= 4 and "goal_topics" not in indexes:
+        raise StateError("incomplete goal selection indexes")
+    if version >= 4 and db.execute("""SELECT 1 FROM goals g WHERE NOT EXISTS
+        (SELECT 1 FROM goal_profiles p WHERE p.scope=g.scope AND p.goal_id=g.id)
+        LIMIT 1""").fetchone():
+        raise StateError("missing goal selection profiles")
     if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
         raise StateError("life database integrity check failed")
     if db.execute("PRAGMA foreign_key_check").fetchone():
@@ -210,11 +220,16 @@ class LifeStore:
 
     def _create_schema(self):
         from .activity_state import ACTIVITY_SCHEMA
+        from .selection_state import SELECTION_SCHEMA, topic_key
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
         statements = (*(SCHEMA if version == 0 else ()),
-                      *(CHAT_SCHEMA if version < 2 else ()), *ACTIVITY_SCHEMA)
+                      *(CHAT_SCHEMA if version < 2 else ()),
+                      *(ACTIVITY_SCHEMA if version < 3 else ()), *SELECTION_SCHEMA)
         for statement in statements:
             self.db.execute(statement)
+        for row in self.db.execute("SELECT scope,id,title FROM goals").fetchall():
+            self.db.execute("INSERT INTO goal_profiles(scope,goal_id,topic_key) VALUES (?,?,?)",
+                            (row["scope"], row["id"], topic_key(row["title"])))
 
     def _backup_schema(self, version):
         folder = self.folder / "schema_backups"
@@ -252,6 +267,7 @@ class LifeStore:
 
     def create_goal(self, scope, source_id, title, why, completion_criteria, next_step,
                     *, owner_kind="agent"):
+        from .selection_state import GoalPolicy, topic_key
         values = {
             "scope": _text(scope, "scope", 250), "source_id": _text(source_id, "source", 250),
             "title": _text(title, "title", 160), "why": _text(why, "why"),
@@ -268,12 +284,17 @@ class LifeStore:
                 if old["source_fingerprint"] != fingerprint:
                     raise ConflictError("goal source already has different content")
                 return _row(old)
+            duplicate = GoalPolicy(self).prepare_goal(values["scope"], values["title"])
+            if duplicate:
+                return duplicate
             identity, now = uuid.uuid4().hex, time.time()
             self.db.execute("""INSERT INTO goals
                 (id,scope,source_id,title,why,completion_criteria,next_step,owner_kind,
                  source_fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (identity, *(values[key] for key in ("scope", "source_id", "title", "why",
                  "completion_criteria", "next_step", "owner_kind")), fingerprint, now, now))
+            self.db.execute("INSERT INTO goal_profiles(scope,goal_id,topic_key) VALUES (?,?,?)",
+                            (values["scope"], identity, topic_key(values["title"])))
             return self.get_goal(values["scope"], identity)
 
     def save_checkpoint(self, scope, goal_id, expected_version, *, next_step, checkpoint,
@@ -381,9 +402,23 @@ class LifeStore:
                  interpretation_json,supersedes_id) VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (identity, scope, goal_id, run_id, source_id, kind, now, evidence,
                  interpretation, supersedes_id))
+            if supersedes_id:
+                self._invalidate_completion(scope, goal_id, supersedes_id, now)
             return _row(self.db.execute(
                 "SELECT * FROM episodes WHERE id=?", (identity,)
             ).fetchone())
+
+    def _invalidate_completion(self, scope, goal_id, source_id, now):
+        goal = self.get_goal(scope, goal_id)
+        if (goal["status"] == "completed"
+                and source_id in goal["checkpoint"].get("completion_evidence", [])):
+            checkpoint = dict(goal["checkpoint"])
+            checkpoint.update(pause_reason="completion_source_revised", resume_policy="manual")
+            self.db.execute("""UPDATE goals SET status='paused',checkpoint_json=?,
+                version=version+1,updated_at=? WHERE scope=? AND id=?""",
+                (_json(checkpoint), now, scope, goal_id))
+            self.db.execute("""UPDATE goal_profiles SET reason='完成依据已修订，等待主人重新核对',
+                condition='owner_review' WHERE scope=? AND goal_id=?""", (scope, goal_id))
 
     def save_note(self, scope, goal_id, expected_version, body, evidence_ids):
         """Append an immutable note revision; version 0 means no note exists yet."""
@@ -484,11 +519,13 @@ class LifeStore:
                      "owner_correction" if supersedes else "owner_feedback", time.time(),
                      _json(evidence), "{}", supersedes))
                 result["episode_id"] = identity
+                if action == "correct":
+                    self._invalidate_completion(scope, goal_id, episode_id, time.time())
             else:
                 _version(expected_version)
                 if goal["version"] != expected_version:
                     raise ConflictError("goal version changed; read the latest state first")
-                if goal["status"] not in {"ready", "paused"}:
+                if goal["status"] not in {"ready", "paused", "shelved"}:
                     raise StateError("goal has an active, blocked or terminal state; "
                                      "no change made")
                 checkpoint = dict(goal["checkpoint"])
@@ -499,6 +536,8 @@ class LifeStore:
                 elif action == "resume":
                     status = "ready"
                     checkpoint.update(pause_reason="", resume_policy="eligible")
+                    self.db.execute("""UPDATE goal_profiles SET streak=0,review_at=0,
+                        condition='',reason='' WHERE scope=? AND goal_id=?""", (scope, goal_id))
                 elif action == "cancel":
                     status = "cancelled"
                     checkpoint.update(pause_reason="owner_cancelled", resume_policy="never")
@@ -524,7 +563,10 @@ class LifeStore:
             if old:
                 return old
             goal = self.get_goal(scope, episode["goal_id"])
-            body = f"[DFL:{episode_id}] 大肥鱼经历资料，事实与感想分开，不代表主人偏好。\n" + _json({
+            attribution = ("主人明确表达的主题偏好，仅限所引消息与目标。"
+                           if episode["kind"] == "owner_interest" else
+                           "大肥鱼经历资料，事实与感想分开，不代表主人偏好。")
+            body = f"[DFL:{episode_id}] {attribution}\n" + _json({
                 "goal_id": goal["id"], "title": goal["title"], "episode_id": episode_id,
                 "kind": episode["kind"], "occurred_at": episode["occurred_at"],
                 "evidence": episode["evidence"], "interpretation": episode["interpretation"],
@@ -582,6 +624,9 @@ def read_snapshot(folder, *, scope=None, limit=20):
         if version >= 3:
             from .activity_state import ACTIVITY_COLUMNS
             columns = dict(columns, **ACTIVITY_COLUMNS)
+        if version >= 4:
+            from .selection_state import SELECTION_COLUMNS
+            columns = dict(columns, **SELECTION_COLUMNS)
         for table in columns:
             result["counts"][table] = db.execute(
                 f"SELECT COUNT(*) FROM {table}{where}", params
@@ -600,6 +645,12 @@ def read_snapshot(folder, *, scope=None, limit=20):
                 (scope, limit))]
         if version >= 3:
             for table in ("activity_control", "activity_time", "activity_calls", "life_deliveries"):
+                result[table] = [_row(row) for row in db.execute(
+                    f"SELECT * FROM {table} WHERE scope=? LIMIT ?", (scope, limit)
+                )]
+        if version >= 4:
+            for table in ("goal_profiles", "goal_attempts", "interest_evidence", "goal_choices",
+                          "goal_reviews"):
                 result[table] = [_row(row) for row in db.execute(
                     f"SELECT * FROM {table} WHERE scope=? LIMIT ?", (scope, limit)
                 )]

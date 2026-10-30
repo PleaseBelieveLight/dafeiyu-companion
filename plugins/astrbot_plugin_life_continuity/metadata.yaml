@@ -1,7 +1,7 @@
 name: astrbot_plugin_life_continuity
 display_name: 大肥鱼自主生活
-desc: 有界资料研究、经历查询与中断恢复；默认关闭，不启用周期活动
-version: v0.3.0
+desc: 目标选择、兴趣证据、搁置与有界资料研究；默认关闭，不启用周期活动
+version: v0.4.0
 author: dafeiyu-tools
 support_platforms:
   - aiocqhttp
