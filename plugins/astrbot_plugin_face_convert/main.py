@@ -28,6 +28,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core import file_token_service, sp
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.utils.context_parts import set_temporary_context
 from astrbot.core.message.components import At, Face, Image, Plain, Record, Reply, Video
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.utils.image_reply import (
@@ -991,6 +992,8 @@ class FaceConvertPlugin(Star):
         media_names = [name for name in media_names if tools.get_tool(name) is not None]
         media_state = "本轮可用媒体工具：" + ("、".join(media_names) or "无") + "。"
         marker = "【当前会话语音状态】"
+        # Keep protocol and style stable. Time, permissions and recent activity
+        # belong beside this turn, after the reusable conversation prefix.
         block = (
             marker
             + REPLY_UNIQUENESS_INSTRUCTIONS
@@ -1001,15 +1004,13 @@ class FaceConvertPlugin(Star):
             )
             + ACTION_MEDIA_INSTRUCTIONS
             + SELFIE_MEDIA_INSTRUCTIONS
-            + "当前北京时间："
-            + datetime.now(SHANGHAI).strftime("%Y-%m-%d %H:%M")
-            + "。"
-            + media_state
-            + action_note
-            + selfie_request_note
-            + selfie_note
-            + "本轮状态："
-            + state
+        )
+        set_temporary_context(
+            req, "【本轮媒体状态】",
+            "以下权限由程序核验，仅对本轮生效；历史状态不代表当前权限。"
+            + "当前北京时间：" + datetime.now(SHANGHAI).strftime("%Y-%m-%d %H:%M")
+            + "。" + media_state + action_note + selfie_request_note + selfie_note
+            + "本轮状态：" + state,
         )
         base = req.system_prompt or ""
         req.system_prompt = (

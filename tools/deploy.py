@@ -66,6 +66,8 @@ def managed_paths() -> list[Path]:
         ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/downloader.py",
         ROOT / "astrbot/data/mcp_server.json",
         ROOT / "astrbot/astrbot/core/provider/func_tool_manager.py",
+        ROOT / "astrbot/astrbot/core/provider/sources/openai_source.py",
+        ROOT / "astrbot/data/cmd_config.json",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/main.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/pages/插件配置/app.js",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/pages/插件配置/index.html",

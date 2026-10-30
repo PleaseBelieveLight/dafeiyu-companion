@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.message.components import Image, Plain, Record
-from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture
+from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture, temporary_text
 
 
 class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
@@ -73,10 +73,10 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
                     set(request.func_tool.names()), expected | {"web_search"}
                 )
                 self.assertEqual(len(registry_tools), 4)
-                self.assertEqual(request.system_prompt.count("本轮可用媒体工具："), 1)
+                self.assertEqual(temporary_text(request).count("本轮可用媒体工具："), 1)
                 self.assertIn("generate_selfie，action", request.system_prompt)
                 self.assertIn("哒哒哒", request.system_prompt)
-                self.assertIn("本轮状态：普通聊天自动语音已允许", request.system_prompt)
+                self.assertIn("本轮状态：普通聊天自动语音已允许", temporary_text(request))
 
     async def test_hook_does_not_grant_missing_tools_or_voice_permission(self):
         plugin, event, _, _, _, _ = fixture("", {"tts_enabled": False})
@@ -88,9 +88,9 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
         ):
             await plugin.inject_voice_status(event, request)
         self.assertIsNone(request.func_tool)
-        self.assertIn("本轮可用媒体工具：无。", request.system_prompt)
+        self.assertIn("本轮可用媒体工具：无。", temporary_text(request))
         self.assertTrue(
-            request.system_prompt.endswith(
+            temporary_text(request).endswith(
                 "本次不允许语音，voice 必须留空；需要表达的话写在 text，图片工具仍可按需使用。"
             )
         )

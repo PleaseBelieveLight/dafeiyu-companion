@@ -14,6 +14,8 @@ def command(action: str, args: list[str]) -> list[str]:
     scripts = {
         "configure": "configure_gui.py",
         "sync-content": "initialize_api.py",
+        "sync-persona": "persona_sync.py",
+        "chat-usage": "chat_usage.py",
         "verify": "verify_install.py",
         "prepare-model": "prepare_model.py",
         "deploy": "deploy.py",

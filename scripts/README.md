@@ -22,8 +22,14 @@
 ```powershell
 .\scripts\安装配置\安装.cmd --skip-model
 .\scripts\维护\部署更新.cmd
+python tools/launch.py chat-usage --days 7
+python tools/launch.py sync-persona --apply
 ```
 
 任务完成后保留窗口供查看结果；配置向导、NapCat 成功打开后自动关闭命令窗口。 自动化调用可先设置
 `$env:DAFEIYU_NO_PAUSE = '1'` 关闭暂停；脚本会保留任务的退出码。 如需自定义运行目录，设置
 `DAFEIYU_RUNTIME_ROOT`，所有入口都会继承该设置。
+
+`chat-usage` 只读查看已接入聊天模型与浏览器的用量；`sync-persona` 默认预览差异，
+加 `--apply` 才会备份并同步源码人格正文。它保留后台工具、技能与开场配置；
+详细的上下文预算和统计边界见 [Token 评审与落地记录](../docs/Token消耗与对话智能评审.md)。

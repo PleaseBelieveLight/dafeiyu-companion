@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from typing import Any
 
@@ -179,9 +180,6 @@ class LlmService:
         req: Any,
         llm_response: Any,
         session_id: str,
-        history_messages: list,
-        prompt: str,
-        extra_parts: list,
         max_rounds: int = 3,
     ) -> Any:
         """执行模型请求的工具调用，并携带结果重问，最多 max_rounds 轮。"""
@@ -201,16 +199,16 @@ class LlmService:
 
         # 重问时不再重复发送 prompt，而是把“历史 + 本轮用户消息 + 工具结果”
         # 一起作为 contexts，避免提示词重复。
-        messages: list[Any] = list(history_messages or [])
-        user_text = prompt
-        extra_texts = [
-            str(getattr(part, "text", ""))
-            for part in (extra_parts or [])
-            if getattr(part, "text", None)
-        ]
-        if extra_texts:
-            user_text = user_text + "\n\n" + "\n\n".join(extra_texts)
-        messages.append({"role": "user", "content": user_text})
+        # Hooks may replace history/prompt and append temporary memory or media.
+        # Assemble the actual request once; never rebuild it from pre-hook inputs.
+        messages: list[Any] = copy.deepcopy(getattr(req, "contexts", None) or [])
+        if req.prompt or req.extra_user_content_parts or req.image_urls or req.audio_urls:
+            messages.append(await req.assemble_context())
+        previous_results = getattr(req, "tool_calls_result", None) or []
+        if not isinstance(previous_results, list):
+            previous_results = [previous_results]
+        for result in previous_results:
+            messages.extend(result.to_openai_messages())
 
         for round_index in range(max_rounds):
             names = list(getattr(llm_response, "tools_call_name", None) or [])
@@ -251,8 +249,11 @@ class LlmService:
                             messages=[],
                             tool_call_timeout=120,
                         )
-                        result = await tool.call(tool_ctx, **valid_args)
+                        async with asyncio.timeout(120):
+                            result = await tool.call(tool_ctx, **valid_args)
                         result_text = self._tool_result_to_text(result)
+                        if len(result_text) > 12000:
+                            result_text = result_text[:12000] + "\n[结果过长，后续内容已省略。]"
                     except Exception as e:
                         logger.error(f"[主动消息] 工具 {name} 执行失败喵: {e}")
                         result_text = f"error: {e}"
@@ -289,6 +290,7 @@ class LlmService:
                 conversation=getattr(req, "conversation", None),
                 func_tool=func_tool,
             )
+            requery.model = getattr(req, "model", None)
             try:
                 llm_response = await invoke_provider(provider, requery)
                 logger.info("[主动消息] 携带工具结果重问 LLM 成功喵。")
@@ -296,6 +298,9 @@ class LlmService:
                 logger.error(f"[主动消息] 携带工具结果重问 LLM 失败喵: {e}")
                 return llm_response
 
+        if getattr(llm_response, "tools_call_name", None):
+            logger.warning("[主动消息] 工具轮数已达上限，本次不发送未完成的回答。")
+            return None
         return llm_response
 
     # ------------------------------------------------------------------
@@ -364,9 +369,6 @@ class LlmService:
                 req,
                 llm_response_obj,
                 session_id,
-                history_messages,
-                final_user_simulation_prompt,
-                extra_parts,
             )
             logger.info("[主动消息] 调用 LLM 成功喵。")
             if plugin.telemetry and plugin.telemetry.enabled:

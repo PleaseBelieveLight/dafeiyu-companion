@@ -12,7 +12,7 @@ from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.utils import selfie_context
-from tests.test_dafeiyu_voice_mode import fixture
+from tests.test_dafeiyu_voice_mode import fixture, temporary_text
 
 omni_module = importlib.import_module("data.plugins.astrbot_plugin_omnidraw.main")
 
@@ -158,8 +158,8 @@ class SelfieContextTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.face.inject_voice_status(self.event, request)
         self.assertEqual(request.func_tool.names(), ["web_search"])
-        self.assertIn("此前由你发出的自拍", request.system_prompt)
-        self.assertIn("voice 必须留空", request.system_prompt)
+        self.assertIn("此前由你发出的自拍", temporary_text(request))
+        self.assertIn("voice 必须留空", temporary_text(request))
         self.generate.assert_awaited_once()
 
     async def test_generation_or_platform_failure_does_not_remember_or_continue(self):
@@ -224,8 +224,8 @@ class SelfieContextTests(unittest.IsolatedAsyncioTestCase):
                     conversation=SimpleNamespace(cid=cid),
                 )
                 await new_face.inject_voice_status(new_event, request)
-                self.assertEqual("白色外套" in request.system_prompt, included)
-                self.assertIn("voice 必须留空", request.system_prompt)
+                self.assertEqual("白色外套" in temporary_text(request), included)
+                self.assertIn("voice 必须留空", temporary_text(request))
 
     async def test_switching_conversation_during_generation_does_not_inject_old_photo(
         self,

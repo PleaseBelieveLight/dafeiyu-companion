@@ -198,6 +198,15 @@ def apply():
             "custom_headers": {},
         },
     ]
+    old_chat = next((item for item in config.get("provider", [])
+                     if item.get("id") == "deepseek_chat"), {})
+    context_policy = {
+        "enabled": True, "input_budget": 16000, "recent_rounds": 12,
+        "summary_max_tokens": 900, "summary_input_chars": 24000,
+        "route_simple_chat_tools": True,
+    }
+    if isinstance(old_chat.get("companion_context"), dict):
+        context_policy.update(old_chat["companion_context"])
     config["provider"] = [
         {
             "id": "deepseek_chat",
@@ -208,6 +217,7 @@ def apply():
             "enable": bool(chat_key),
             "modalities": ["text", "image"],
             "custom_extra_body": {"thinking": {"type": "disabled"}},
+            "companion_context": context_policy,
         },
         {
             "id": "bailian_vision",

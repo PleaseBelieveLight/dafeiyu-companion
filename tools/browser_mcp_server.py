@@ -26,6 +26,7 @@ import os
 import sys
 from pathlib import Path
 from workspace import RUNTIME_ROOT
+from model_usage import attach_browser_metering
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -75,6 +76,9 @@ class ChatDeepSeekNoThinking(ChatDeepSeek):
 
     def _supports_thinking(self) -> bool:
         return True
+
+    def _client(self):
+        return attach_browser_metering(super()._client())
 
 
 mcp = MCPServer(

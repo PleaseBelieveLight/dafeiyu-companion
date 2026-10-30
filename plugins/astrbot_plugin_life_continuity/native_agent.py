@@ -57,7 +57,10 @@ async def _native(context, event, prompt, before, after, config, stop, on_runner
             "provider_settings", {}
         ),
     )
-    instructions = (persona or {}).get("prompt", "") + instructions
+    # Research produces private JSON, not a public chat reply. Only a compact
+    # identity cue is relevant; media, phone and delivery rules waste context here.
+    identity = (persona or {}).get("persona_id", "大肥鱼")
+    instructions = f"你以{identity[:80]}的视角整理资料，保持好奇、有自己的判断，尊重来源。" + instructions
     request = ProviderRequest(prompt=prompt, system_prompt=instructions, contexts=[],
                               func_tool=ToolSet(), session_id=event.unified_msg_origin)
     runner = ToolLoopAgentRunner()

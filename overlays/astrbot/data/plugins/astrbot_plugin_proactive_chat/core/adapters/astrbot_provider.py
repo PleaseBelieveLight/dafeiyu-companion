@@ -116,6 +116,9 @@ async def invoke_provider(provider: Any, req: Any) -> Any:
     model = getattr(req, "model", None)
     if model:
         call_kwargs["model"] = model
+    conversation = getattr(req, "conversation", None)
+    if conversation is not None and getattr(conversation, "cid", None):
+        call_kwargs["conversation_id"] = conversation.cid
 
     supported = supported_provider_kwargs(provider)
     if supported is not None:

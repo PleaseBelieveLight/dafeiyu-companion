@@ -206,12 +206,14 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         history = list(request.contexts)
         await self.plugin.inject_context(FakeEvent(), request)
         await self.plugin.inject_context(FakeEvent(), request)
-        self.assertEqual(request.system_prompt.count("【自主生活当前记录】"), 1)
-        self.assertIn("研究理由", request.system_prompt)
+        block = json.dumps(request.extra_user_content_parts, ensure_ascii=False)
+        self.assertEqual(block.count("【自主生活当前记录】"), 1)
+        self.assertIn("研究理由", block)
+        self.assertTrue(request.extra_user_content_parts[0]["_no_save"])
         self.assertIn("其他插件上下文", request.system_prompt)
         self.assertEqual(request.contexts, history)
         await self.plugin.inject_context(FakeEvent(scope=OTHER, sender="1002"), request)
-        self.assertNotIn("研究理由", request.system_prompt)
+        self.assertNotIn("研究理由", json.dumps(request.extra_user_content_parts, ensure_ascii=False))
         self.assertEqual([tool.name for tool in request.func_tool.tools], ["other_tool"])
         self.assertEqual(len(shared.tools), 2)
 
@@ -253,7 +255,7 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
                           side_effect=sqlite3.OperationalError("broken")):
             await self.plugin.inject_context(FakeEvent(), request)
         self.assertIn("原有人格", request.system_prompt)
-        self.assertIn("暂不可用", request.system_prompt)
+        self.assertIn("暂不可用", json.dumps(request.extra_user_content_parts, ensure_ascii=False))
         self.plugin.store.record_episode(SCOPE, self.goal["id"], "large", kind="read",
                                          evidence={"large": "大" * 15000})
         result = await self.plugin.recall(FakeEvent())

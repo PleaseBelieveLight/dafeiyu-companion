@@ -25,6 +25,11 @@ sender_module = importlib.import_module(
 )
 
 
+def temporary_text(request):
+    return "\n".join(part.get("text", "") if isinstance(part, dict) else getattr(part, "text", "")
+                     for part in getattr(request, "extra_user_content_parts", []))
+
+
 def envelope(text, voice):
     """Create a model output fixture.
 
@@ -282,7 +287,7 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await plugin.inject_voice_status(event, request)
                 await plugin.inject_voice_status(event, request)
-            self.assertIn(expected, request.system_prompt)
+            self.assertIn(expected, json.dumps(request.extra_user_content_parts, ensure_ascii=False))
             self.assertEqual(request.system_prompt.count("【当前会话语音状态】"), 1)
             self.assertNotIn("tts_trigger_probability", extras)
             provider.get_audio.assert_not_awaited()

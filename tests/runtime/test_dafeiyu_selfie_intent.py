@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from astrbot.core.message.components import Image
 from astrbot.core.utils.selfie_intent import SHANGHAI
 from tests.test_dafeiyu_action_execution import action_fixture, omni_module
-from tests.test_dafeiyu_voice_mode import envelope, face_module
+from tests.test_dafeiyu_voice_mode import envelope, face_module, temporary_text
 
 
 class SelfieIntentIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -112,7 +112,7 @@ class SelfieIntentIntegrationTests(unittest.IsolatedAsyncioTestCase):
             clock.now.return_value = now
             await plugin.inject_voice_status(event, request)
         self.assertIn("躺在床上", omni._run_selfie_generation.await_args.args[1])
-        self.assertIn("2026-10-29 10:30", request.system_prompt)
+        self.assertIn("2026-10-29 10:30", temporary_text(request))
 
     async def test_permission_or_api_failure_never_claims_success_or_retries(self):
         for failure, denied in [(True, False), (False, True)]:

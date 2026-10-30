@@ -570,7 +570,7 @@ class ActivityPluginTests(unittest.IsolatedAsyncioTestCase):
                 request = types.SimpleNamespace(system_prompt="正常聊天人格", func_tool=None)
                 await plugin.inject_context(FakeEvent(), request)
                 self.assertIn("正常聊天人格", request.system_prompt)
-                self.assertIn("暂不可用", request.system_prompt)
+                self.assertIn("暂不可用", json.dumps(request.extra_user_content_parts, ensure_ascii=False))
             finally:
                 await plugin.terminate()
 

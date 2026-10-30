@@ -332,9 +332,16 @@ class LifePluginTests(unittest.IsolatedAsyncioTestCase):
             ROOT / "plugins" / PLUGIN_NAME / "main.py",
         )
         self.module = importlib.util.module_from_spec(spec)
+        helper_spec = importlib.util.spec_from_file_location(
+            "astrbot.core.utils.context_parts",
+            ROOT / "overlays/astrbot/astrbot/core/utils/context_parts.py",
+        )
+        helper = importlib.util.module_from_spec(helper_spec)
+        helper_spec.loader.exec_module(helper)
         with patch.dict(sys.modules, {"astrbot": types.ModuleType("astrbot"),
                                      "astrbot.api": api, "astrbot.api.star": star,
-                                     "astrbot.api.event": event_api}):
+                                     "astrbot.api.event": event_api,
+                                     "astrbot.core.utils.context_parts": helper}):
             spec.loader.exec_module(self.module)
         self.data_dir = star.StarTools.get_data_dir
 

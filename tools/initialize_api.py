@@ -7,6 +7,7 @@ import time
 import httpx
 
 from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT
+from persona_sync import source_prompt
 
 lock = (ROOT / "run/api-setup.lock").open("a+b")
 if lock.tell() == 0:
@@ -61,8 +62,7 @@ for attempt in range(90):
 
 personas = items(api("GET", "/personas"))
 if not any(p.get("persona_id") == "大肥鱼" for p in personas):
-    prompt = (SOURCE / "persona/大肥鱼-人格.md").read_text(encoding="utf-8-sig")
-    prompt = prompt.split("\n---\n", 1)[-1].strip()
+    prompt = source_prompt(SOURCE / "persona/大肥鱼-人格.md")
     api(
         "POST",
         "/personas",

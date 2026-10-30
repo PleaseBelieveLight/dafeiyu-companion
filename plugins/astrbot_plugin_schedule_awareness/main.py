@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""把当前会话名下的定时任务实时注入系统提示词。
+"""把当前会话名下的定时任务实时注入本轮临时上下文。
 
 目标不是“记一条笔记”，而是让她每一轮都看得到程序里真实存在的日程：
 - 只读 AstrBot 的 cron_jobs 表，不缓存、不改任务；
@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.core.utils.context_parts import set_temporary_context
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 # /AstrBot/data/plugins/astrbot_plugin_schedule_awareness -> /AstrBot/data/data_v4.db
@@ -27,7 +28,7 @@ MARKER = "【你名下的定时任务"
 @register(
     "astrbot_plugin_schedule_awareness",
     "dafeiyu-tools",
-    "把当前会话名下的定时任务实时注入系统提示词，让她知道自己的日程",
+    "把当前会话名下的定时任务实时注入临时上下文，让她知道自己的日程",
     "1.0.0",
 )
 class ScheduleAwarenessPlugin(Star):
@@ -130,13 +131,6 @@ class ScheduleAwarenessPlugin(Star):
     async def inject_schedule(self, event: AstrMessageEvent, req) -> None:
         try:
             block = self._format_schedule(self._load_jobs(), event.unified_msg_origin)
-            if not block:
-                return
-            base = req.system_prompt or ""
-            # 防止同一请求被重复注入；旧块整段替换成最新日程
-            cut = base.find(MARKER)
-            if cut != -1:
-                base = base[:cut].rstrip()
-            req.system_prompt = (base + "\n\n" + block).strip()
+            set_temporary_context(req, "【本轮程序日程】", block)
         except Exception as exc:  # noqa: BLE001 - 注入失败不能影响聊天
             logger.warning(f"[schedule_awareness] 注入日程失败: {exc}")

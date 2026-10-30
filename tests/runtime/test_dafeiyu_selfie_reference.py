@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from astrbot.core.utils.selfie_reference import REFERENCE_STYLES
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from tests import test_dafeiyu_selfie_context as context_fixture
 
 persona_module = importlib.import_module(
@@ -30,8 +31,7 @@ class SelfieReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.references.mkdir()
         # Tests run against an installation; reuse its public images without loading models.
         installed = (
-            Path(__file__).resolve().parents[1]
-            / "data/plugin_data/astrbot_plugin_omnidraw/selfie_references"
+            Path(get_astrbot_data_path()) / "plugin_data/astrbot_plugin_omnidraw/selfie_references"
         )
         for filename, _ in REFERENCE_STYLES.values():
             shutil.copy2(installed / filename, self.references / filename)

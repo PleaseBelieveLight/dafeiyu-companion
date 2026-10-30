@@ -7,6 +7,7 @@ from datetime import datetime
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.core.utils.context_parts import set_temporary_context
 
 from .chat import TOOLS, LifeChat, is_owner_event, parse_command, plain_owner_text
 from .activity import ActivityEngine
@@ -157,6 +158,7 @@ class LifeContinuityPlugin(Star):
         if previous:
             req.system_prompt = (req.system_prompt or "").replace(previous, "", 1)
             req._life_context_block = ""
+        set_temporary_context(req, "【自主生活本轮资料】", "")
         allowed = self.allowed(event)
         # Request-local copy: hiding our tools must not mutate the global set.
         if getattr(req, "func_tool", None) is not None:
@@ -171,8 +173,7 @@ class LifeContinuityPlugin(Star):
         except Exception:
             logger.exception("[life_continuity] 经历上下文读取失败，保留正常聊天。")
             block = "自主生活本地记录暂不可用；不得据此声称没有目标或编造进展。"
-        req._life_context_block = "\n" + block
-        req.system_prompt = (req.system_prompt or "") + req._life_context_block
+        set_temporary_context(req, "【自主生活本轮资料】", block)
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=90)
     async def owner_message(self, event: AstrMessageEvent):
