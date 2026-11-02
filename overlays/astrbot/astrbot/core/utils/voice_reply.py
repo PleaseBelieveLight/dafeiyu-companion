@@ -6,6 +6,13 @@
 import json
 import re
 from difflib import SequenceMatcher
+from typing import NotRequired, TypedDict
+
+
+class VoiceReply(TypedDict):
+    text: str
+    voice: str
+    voice_requested: NotRequired[bool]
 
 
 VOICE_COOLDOWN_SECONDS = 180
@@ -19,6 +26,13 @@ VOICE_REPLY_INSTRUCTIONS = (
     "默认直接用自然文字回复，无需JSON，长短随话题和情绪变化。仅在语音获准且用户明确想听、需要安慰/鼓励、"
     "或重要事情确实适合出声时用语音；普通问候、闲聊、发图不默认配音，不连续发语音。"
     '语音回复用 <fy_reply>{"voice":"自然口语内容"}</fy_reply>，系统负责合成。'
+    "按语义判断本轮是否实际要求听你出声，空格、引号、情绪和较长修饰语不改变表达渠道。"
+    "例如‘我想听听你“生气”时的声音’、‘来一条带点委屈劲儿的语音条’，语音获准时必须选择 voice，"
+    '并在同一个 fy_reply 对象中增加 "voice_requested":true，表示用户明确要求，本轮不受闲聊冷却限制。'
+    "引用或转述别人的话、讨论声音或接口、拒绝出声不算请求；自主安慰或普通闲聊不标记 voice_requested。"
+    "要求模仿角色声音、演绎台词、配音或朗读也是出声请求，必须实际选择语音，不能只打出台词并声称让对方听。"
+    "系统提供可用的TTS声音；没有指定角色的原声音色时，使用当前音色演绎，不声称还原了原声，"
+    "也不把没有该音色解释成没有声音、没有声带或不能发语音。"
     "通常文字、语音选一种。仅当文字另有可保存的信息（链接、时间地点、名称、步骤）"
     '时增加 "text" 字段；两者表达不同信息，不复述、换说法重复，也不朗读链接或代码。'
     "不方便听或语音关闭时只用文字，不自行开语音。需要工具就正常调用；"
@@ -61,7 +75,7 @@ ACTION_MEDIA_INSTRUCTIONS = (
 )
 
 
-def parse_voice_reply(raw: str) -> dict[str, str] | None:
+def parse_voice_reply(raw: str) -> VoiceReply | None:
     """Decode a channel envelope without exposing malformed control text.
 
     Args:
@@ -82,6 +96,7 @@ def parse_voice_reply(raw: str) -> dict[str, str] | None:
             not isinstance(value, dict)
             or not any(key in value for key in ("text", "voice"))
             or not all(isinstance(value.get(key, ""), str) for key in ("text", "voice"))
+            or ("voice_requested" in value and not isinstance(value["voice_requested"], bool))
         ):
             raise ValueError("Invalid reply channel types")
     except (ValueError, TypeError):
@@ -98,7 +113,10 @@ def parse_voice_reply(raw: str) -> dict[str, str] | None:
                     pass
         if not any(value.values()):
             value["text"] = "这句话我没组织好，你再说一次好吗？"
-    return compact_voice_reply({key: value.get(key, "").strip() for key in ("text", "voice")})
+    plan = {key: value.get(key, "").strip() for key in ("text", "voice")}
+    if value.get("voice_requested") is True:
+        plan["voice_requested"] = True
+    return compact_voice_reply(plan)
 
 
 def session_voice_enabled(config: dict, session: dict | None = None) -> bool:
@@ -123,25 +141,69 @@ def session_voice_enabled(config: dict, session: dict | None = None) -> bool:
     return False
 
 
+def _unquoted_voice_text(message: str) -> str:
+    # Quoted words can describe a tone; quoted requests are data, not instructions.
+    quoted = r'“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|‘[^’\n]*’|"[^"\n]*"' + r"|'[^'\n]*'"
+    text = re.sub(quoted, "", message)
+    return re.sub(r"[^\S\n]+", "", text)
+
+
+def voice_request_is_discussion(message: str) -> bool:
+    """Keep quotations, reported speech and technical questions out of audio overrides."""
+    text = _unquoted_voice_text(str(message or ""))
+    if not text or re.search(
+        r"^(?:怎么|如何).*(?:语音|声音|唱|哼|模仿|配音|朗读)"
+        r"|^(?:他|她|别人|对方|有人)(?:刚才)?(?:说|问|表示)"
+        r"|^(?:转述|引用|原文|例句|示例)",
+        text,
+    ):
+        return True
+    # A direct channel request can also ask for a technical explanation.
+    if re.search(r"用语音(?:说|讲|告诉|回复|回答|解释|聊|读|鼓励|安慰|给我|$)|说给我听|读给我听", text):
+        return False
+    return bool(re.search(
+        r"原理|接口|代码|教程|是什么意思|这句话|这个说法"
+        r"|(?:写|编|列|整理|推荐)[^，,。.!?？;；\n]*(?:台词|文案|剧本|朗读稿)"
+        r"|(?:不要|不用|别|先别)(?:再)?(?:模仿|配音|朗读)"
+        r"|(?:声音|嗓音)[^，,。.!?？;；\n]*(?:特点|区别|分析|看法|意见|评价)", text,
+    ))
+
+
 def voice_preference(message: str, dialogue=()) -> str:
     """Respect listening conditions and explicit requests without another model call."""
 
     def preference(text):
-        text = text.replace("取消静音", "可以听了")
+        text = _unquoted_voice_text(str(text or "")).replace("取消静音", "可以听了")
         if re.search(
             r"不(?:要|用|需要|想听)(?:再)?(?:发|用)?语音|别(?:发|用|再发)语音"
             r"|只(?:发|用|要)文字|文字(?:就好|回复)|用文字(?:说|回复|解释)|静音"
             r"|(?:不要|不用|不想|别|先别)(?:再)?(?:唱|哼|出声|发声音)"
-            r"|不想听.{0,6}(?:唱|哼|声音)|不方便听|不能放声音|需要安静",
+            r"|不想听[^，,。.!?？;；\n]*(?:唱|哼|声音|嗓音)|不方便听|不能放声音|需要安静",
             text,
         ):
             return "quiet"
-        if re.search(r"^(?:怎么|如何).{0,10}(?:发|用).{0,8}语音", text):
+        if voice_request_is_discussion(text):
             return ""
         if re.search(
             r"用语音(?:说|讲|告诉|回复|回答|解释|聊|读|鼓励|安慰|给我|[，。！!？?\s]|$)"
             r"|发.{0,4}语音|语音(?:说|回复|聊天|聊聊|聊|沟通)(?:给我|一下|吧|呀|嘛|好吗|可以吗|[，。！!？?\s]|$)"
-            r"|想听.{0,6}(?:声音|说话)|说给我听|读给我听",
+            r"|(?:想|要|让我|给我|能否|能不能|可以)听(?:听|一听|一下)?"
+            r"(?:你|您|大肥鱼)(?!对|关于)[^，,。.!?？;；\n]*(?:声音|嗓音|说话)"
+            r"|说给我听|读给我听",
+            text,
+        ):
+            return "voice"
+        # Audible performances are channel requests even without "想听" or "发语音".
+        # Match actions and speech objects, never a particular character or quotation.
+        if re.search(
+            r"(?:模仿|学(?:一下|一声|一句|两句|着)|演绎|表演)[^，,。.!?？;；\n]*"
+            r"(?:声音|嗓音|语气|腔调|口吻|台词)"
+            r"|(?:用|以|换成|带着)[^，,。.!?？;；\n]*(?:声音|嗓音|语气|腔调)"
+            r"[^，,。.!?？;；\n]*(?:说|讲|念|读|喊)"
+            r"|^(?:(?:请|你|帮我|给我|再|重新|继续))*"
+            r"(?:朗读|念(?:念|一下|(?:[一两几\d]+)?(?:遍|段|句)|$))"
+            r"|(?:给|为)[^，,。.!?？;；\n]*(?:配音|朗读)"
+            r"|(?:把|将)[^，,。.!?？;；\n]*(?:读|念|说)(?:出来|出声|给我听)",
             text,
         ):
             return "voice"
@@ -254,7 +316,15 @@ def _single_chat_answer(text: str, voice: str) -> str:
     return text
 
 
-def compact_voice_reply(plan: dict[str, str]) -> dict[str, str]:
+def compact_voice_reply(plan: VoiceReply) -> VoiceReply:
+    """Preserve the model's explicit-request marker while compacting the two channels."""
+    result = _compact_voice_channels(plan)
+    if plan.get("voice_requested") is True:
+        result["voice_requested"] = True
+    return result
+
+
+def _compact_voice_channels(plan: VoiceReply) -> VoiceReply:
     """Keep one channel unless written references and speech serve separate purposes."""
     text, voice = (plan.get(key, "").strip() for key in ("text", "voice"))
     if re.search(r"https?://|```", voice):

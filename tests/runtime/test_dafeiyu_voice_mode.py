@@ -4,6 +4,7 @@ import copy
 import importlib
 import json
 import re
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -176,6 +177,36 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
     ):
         cases = [
             (
+                "explicit_imitation",
+                {"tts_enabled": True},
+                False,
+                True,
+                "那我用现在的声音演绎一句：来战！",
+                False,
+                [],
+                ["那我用现在的声音演绎一句：来战！"],
+            ),
+            (
+                "explicit_anger",
+                {"tts_enabled": True},
+                False,
+                True,
+                "哼，你刚才都不理肥鱼。",
+                False,
+                [],
+                ["哼，你刚才都不理肥鱼。"],
+            ),
+            (
+                "model_request",
+                {"tts_enabled": True},
+                False,
+                True,
+                '<fy_reply>{"text":"好嘛，我小声跟你说晚安。","voice_requested":true}</fy_reply>',
+                False,
+                [],
+                ["好嘛，我小声跟你说晚安。"],
+            ),
+            (
                 "text",
                 {"tts_enabled": True},
                 False,
@@ -291,6 +322,15 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
                 plugin, event, result, provider, extras, context = fixture(
                     raw, session, proactive, proactive_tts, failure
                 )
+                if name in {"explicit_imitation", "explicit_anger", "model_request"}:
+                    event.get_message_str.return_value = (
+                        '你模仿一句 “吕布” 英雄的台词声音看看'
+                        if name == "explicit_imitation"
+                        else '我想听听你 “生气” 时的声音'
+                        if name == "explicit_anger"
+                        else "给我来一条带点委屈劲儿的语音条"
+                    )
+                    plugin._last_voice_at = {event.unified_msg_origin: time.monotonic()}
                 handler = SimpleNamespace(
                     handler=plugin.convert_faces,
                     handler_module_path="test.voice",

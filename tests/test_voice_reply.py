@@ -14,10 +14,95 @@ from voice_reply import (
     session_voice_enabled,
     voice_cooling_down,
     voice_preference,
+    voice_request_is_discussion,
 )
 
 
 class VoiceReplyTests(unittest.TestCase):
+    def test_audible_performance_requests_choose_voice_without_hearing_keywords(self):
+        for message in (
+            '你模仿一句 “吕布” 英雄的台词声音看看',
+            '请模仿一下「孙悟空」的声音',
+            '学一句角色的台词给我听',
+            '你演绎一段这个角色的台词',
+            '用低沉的声音说一句晚安',
+            '你用撒娇的语气说声晚上好',
+            '请给这段文字配音',
+            '请你朗读这段话',
+            '给我念一下这段台词',
+            '你把这段台词读出来',
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "voice")
+
+    def test_performance_discussion_writing_and_refusals_do_not_request_audio(self):
+        for message in (
+            '帮我写一句模仿吕布的台词',
+            '编一段用低沉声音说话的文案',
+            '如何模仿吕布的台词',
+            '模仿角色声音的接口怎么实现',
+            '他说你模仿一句吕布的台词声音看看',
+            '不要模仿吕布的声音',
+            '我喜欢朗读',
+            '给我看看模仿吕布的站姿',
+            '“你模仿一句吕布的台词声音看看”',
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "normal")
+        self.assertEqual(voice_preference('只发文字，模仿一句吕布的台词声音看看'), "quiet")
+
+    def test_explicit_hearing_requests_tolerate_quotes_spaces_and_long_modifiers(self):
+        for message in (
+            '我想听听你 “生气” 时的声音',
+            '我想听听你 "生气" 时的声音',
+            "我想听听你 '生气' 时的声音",
+            "我 想 听 听 你 「生气」 时 的 声音",
+            "我想听听你平时特别生气却又忍着不发脾气时候的声音",
+            "让我听听你压低一点又有些撒娇的嗓音吧",
+            "我想听你说话",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "voice")
+                self.assertFalse(voice_cooling_down(100, 101, message, "voice"))
+
+    def test_quoted_reported_and_technical_voice_mentions_are_not_requests(self):
+        for message in (
+            '“我想听听你生气时的声音”',
+            "'我想听你的声音'",
+            "解释一下‘我想听你的声音’这句话",
+            "他说我想听你的声音",
+            "引用：我想听听你生气时的声音",
+            "我想听你对这个声音的看法",
+            "我想听这个人的声音",
+            "我想听你介绍语音接口的原理",
+            "如何用语音说一句晚安",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "normal")
+        self.assertEqual(voice_preference("用语音解释这段代码"), "voice")
+        self.assertFalse(voice_request_is_discussion("用语音解释这段代码"))
+        self.assertEqual(voice_preference('读给我听：“不要发语音”'), "voice")
+
+    def test_long_refusals_and_listening_conditions_override_hearing_requests(self):
+        for message in (
+            "我不想听听你 “生气” 时的声音",
+            "我不想听你平时特别生气却又忍着不发脾气时候的声音",
+            "我想听你的声音，不过现在只发文字",
+            "我想听你生气时的声音，但现在不方便听",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(voice_preference(message), "quiet")
+
+    def test_model_request_marker_survives_cleanup_without_becoming_spoken_content(self):
+        raw = '<fy_reply>{"text":"晚安。","voice_requested":true}</fy_reply>'
+        expected = {"text": "晚安。", "voice": "", "voice_requested": True}
+        plan = parse_voice_reply(raw)
+        self.assertEqual(plan, expected)
+        self.assertEqual(compact_voice_reply(plan), expected)
+        for flag in ('"true"', '1', 'false'):
+            raw = '<fy_reply>{"text":"晚安。","voice_requested":' + flag + '}</fy_reply>'
+            self.assertEqual(parse_voice_reply(raw), {"text": "晚安。", "voice": ""})
+
     def test_unset_voice_switch_tracks_only_the_selected_enabled_tts_key(self):
         config = {
             "provider_tts_settings": {"enable": True, "provider_id": "speech"},

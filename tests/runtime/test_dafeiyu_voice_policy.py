@@ -1,5 +1,6 @@
 """Verify sparse speech, one-channel replies and explicit overrides at delivery."""
 
+import json
 import time
 import unittest
 from types import SimpleNamespace
@@ -10,6 +11,102 @@ from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture
 
 
 class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_imitation_request_converts_unmarked_model_text_and_reaches_synthesis(self):
+        message = '你模仿一句 “吕布” 英雄的台词声音看看'
+        text = '那我用现在的声音演绎一句：来战！'
+        for enabled, failure in ((True, False), (False, False), (True, True)):
+            with self.subTest(enabled=enabled, failure=failure):
+                values = fixture("", {"tts_enabled": enabled}, failure=failure)
+                plugin, event, result, provider, extras, _ = values
+                event.get_message_str.return_value = message
+                request = SimpleNamespace(system_prompt="Existing persona.", contexts=[])
+                response = SimpleNamespace(completion_text=text)
+                with patch.object(
+                    face_module.sp, "get_async",
+                    new=AsyncMock(return_value={"tts_enabled": enabled}),
+                ):
+                    await plugin.inject_voice_status(event, request)
+                    self.assertEqual(extras["_fy_voice_mode"], "voice")
+                    await plugin.scrub_drafts(event, response)
+                    result.chain = [Plain(response.completion_text)]
+                    await plugin.prepare_contextual_reply(event, result)
+                    await plugin.prepare_contextual_reply(event, result)
+                self.assertEqual(provider.get_audio.await_count, int(enabled))
+                if enabled and not failure:
+                    self.assertEqual([c.text for c in result.chain if isinstance(c, Record)], [text])
+                    self.assertFalse(any(isinstance(c, Plain) for c in result.chain))
+                else:
+                    self.assertEqual(result.get_plain_text(), text)
+
+    async def test_reported_anger_request_converts_plain_text_once_even_during_cooldown(self):
+        text = "哼，刚才都不理肥鱼，我可是等了好一会儿呢。"
+        for raw in (text, envelope(text, ""), envelope("", text)):
+            with self.subTest(raw=raw):
+                _, _, result, provider, extras, _ = await self.deliver(
+                    raw, '我想听听你 “生气” 时的声音', recent=True
+                )
+                self.assertEqual([c.text for c in result.chain if isinstance(c, Record)], [text])
+                self.assertFalse(any(isinstance(c, Plain) for c in result.chain))
+                provider.get_audio.assert_awaited_once_with(text)
+                self.assertTrue(extras["_fy_voice_delivered"])
+
+    async def test_model_understood_request_survives_hooks_and_bypasses_cooldown(self):
+        text = "好嘛，那我小声跟你说，今天也想你啦。"
+        values = fixture("", {"tts_enabled": True})
+        plugin, event, result, provider, extras, _ = values
+        event.get_message_str.return_value = "给我来一条带点委屈劲儿的语音条"
+        plugin._last_voice_at = {event.unified_msg_origin: time.monotonic()}
+        request = SimpleNamespace(system_prompt="Existing persona.", contexts=[])
+        raw = '<fy_reply>' + json.dumps(
+            {"text": text, "voice_requested": True}, ensure_ascii=False
+        ) + '</fy_reply>'
+        response = SimpleNamespace(completion_text=raw)
+        with patch.object(
+            face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": True})
+        ):
+            await plugin.inject_voice_status(event, request)
+            self.assertEqual(extras["_fy_voice_mode"], "normal")
+            self.assertIn('"voice_requested":true', request.system_prompt)
+            await plugin.scrub_drafts(event, response)
+            self.assertEqual(response.completion_text, text)
+            self.assertTrue(extras["_fy_voice_plan"]["voice_requested"])
+            result.chain = [Plain(response.completion_text)]
+            await plugin.prepare_contextual_reply(event, result)
+            await plugin.prepare_contextual_reply(event, result)
+        provider.get_audio.assert_awaited_once_with(text)
+        self.assertEqual([c.text for c in result.chain if isinstance(c, Record)], [text])
+
+    async def test_model_request_cannot_override_permissions_quiet_or_discussion(self):
+        raw = '<fy_reply>{"text":"晚安。","voice_requested":true}</fy_reply>'
+        for message, enabled, proactive in (
+            ("来一条带点委屈的语音条", False, False),
+            ("不要发语音，只发文字", True, False),
+            ("我在开会，不方便听", True, False),
+            ('解释“我想听你的声音”这句话', True, False),
+            ('“我想听你的声音”', True, False),
+            ("语音接口的原理是什么", True, False),
+            ("我想听你对这个声音的看法", True, False),
+            ("他说我想听你的声音", True, False),
+            ("该跟主人道晚安啦", True, True),
+        ):
+            with self.subTest(message=message, enabled=enabled, proactive=proactive):
+                _, _, result, provider, _, _ = await self.deliver(
+                    raw, message, recent=True, enabled=enabled, proactive=proactive
+                )
+                self.assertEqual(result.get_plain_text(), "晚安。")
+                provider.get_audio.assert_not_awaited()
+
+    async def test_explicit_anger_request_respects_off_switch_and_synthesis_failure(self):
+        message = '我想听听你 “生气” 时的声音'
+        for enabled, failure in ((False, False), (True, True)):
+            with self.subTest(enabled=enabled, failure=failure):
+                plugin, _, result, provider, _, _ = await self.deliver(
+                    "哼，我还在等你呢。", message, enabled=enabled, failure=failure
+                )
+                self.assertEqual(result.get_plain_text(), "哼，我还在等你呢。")
+                self.assertEqual(provider.get_audio.await_count, int(enabled))
+                self.assertFalse(getattr(plugin, "_last_voice_at", {}))
+
     async def test_reported_rephrasings_are_removed_before_storage_and_delivery(self):
         examples = [
             (

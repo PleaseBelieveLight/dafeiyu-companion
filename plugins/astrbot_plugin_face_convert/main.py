@@ -58,6 +58,7 @@ from astrbot.core.utils.voice_reply import (
     session_voice_enabled,
     voice_cooling_down,
     voice_preference,
+    voice_request_is_discussion,
 )
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -917,7 +918,8 @@ class FaceConvertPlugin(Star):
             state += "对方现在不方便听或要求文字，本轮只用文字。"
         elif enabled and mode == "voice":
             state += (
-                "对方明确要求出声，本轮优先只发语音，普通闲聊冷却不限制这个请求；"
+                "对方明确要求出声，本轮必须将可朗读的回复放在 voice，并标记 voice_requested=true；"
+                "不能只用文字描述表演，普通闲聊冷却不限制这个请求；"
                 "需复制的信息才另外留文字。语音权限已核实，不要求对方重复开关，"
                 "不猜测开关未开，也不在发送完成前声称已经发出。"
             )
@@ -1407,6 +1409,15 @@ class FaceConvertPlugin(Star):
         )
         other = [c for c in result.chain if not isinstance(c, Plain)]
         mode = event.get_extra("_fy_voice_mode") or voice_preference(event.get_message_str())
+        model_requested = (
+            not proactive
+            and plan.get("voice_requested") is True
+            and not voice_request_is_discussion(event.get_message_str())
+        )
+        request_source = "local" if mode == "voice" else "none"
+        if mode != "quiet" and model_requested:
+            mode = "voice"
+            request_source = "model" if request_source == "none" else "local+model"
         if allowed and mode == "voice" and text and not voice and not re.search(r"https?://|```", text):
             voice, text = text, ""
         last_voice = getattr(self, "_last_voice_at", {}).get(event.unified_msg_origin)
@@ -1419,8 +1430,8 @@ class FaceConvertPlugin(Star):
             )
             voice = ""
         logger.info(
-            "Contextual voice decision: preference=%s, allowed=%s, cooling=%s, selected=%s",
-            mode, allowed, cooling, bool(voice),
+            "Contextual voice decision: preference=%s, allowed=%s, cooling=%s, selected=%s, request=%s",
+            mode, allowed, cooling, bool(voice), request_source,
         )
         spoken = re.sub(r"\[[A-Za-z一-鿿]{1,6}\]", "", voice).strip()
         audio = []
