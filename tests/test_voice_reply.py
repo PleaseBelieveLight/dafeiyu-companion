@@ -11,12 +11,60 @@ from voice_reply import (
     compact_voice_reply,
     merge_reply_text,
     parse_voice_reply,
+    session_voice_enabled,
     voice_cooling_down,
     voice_preference,
 )
 
 
 class VoiceReplyTests(unittest.TestCase):
+    def test_unset_voice_switch_tracks_only_the_selected_enabled_tts_key(self):
+        config = {
+            "provider_tts_settings": {"enable": True, "provider_id": "speech"},
+            "provider": [
+                {"id": "chat", "enable": True, "api_key": "test-chat-key"},
+                {"id": "speech", "enable": True, "api_key": ""},
+            ],
+        }
+        session = {"llm_enabled": True}
+        self.assertFalse(session_voice_enabled(config, session))
+        config["provider"][1]["api_key"] = "test-speech-key"
+        self.assertTrue(session_voice_enabled(config, session))
+        self.assertEqual(session, {"llm_enabled": True})
+        config["provider"][1]["api_key"] = " \t\n"
+        self.assertFalse(session_voice_enabled(config, session))
+        config["provider"][1]["api_key"] = "test-speech-key"
+        config["provider"][1]["enable"] = False
+        self.assertFalse(session_voice_enabled(config, session))
+        config["provider_tts_settings"]["provider_id"] = "missing"
+        self.assertFalse(session_voice_enabled(config, session))
+        config["provider_tts_settings"]["provider_id"] = ""
+        self.assertFalse(session_voice_enabled(config, session))
+
+    def test_explicit_voice_switch_survives_key_changes_and_reloading(self):
+        config = {
+            "provider_tts_settings": {"enable": True, "provider_id": "speech"},
+            "provider": [{"id": "speech", "enable": True, "api_key": "test-key"}],
+        }
+        for enabled in (False, True):
+            saved = json.dumps({"tts_enabled": enabled, "llm_enabled": True})
+            for api_key in ("", "test-key", "replacement-key"):
+                config["provider"][0]["api_key"] = api_key
+                self.assertEqual(session_voice_enabled(config, json.loads(saved)), enabled)
+        config["provider_tts_settings"]["enable"] = False
+        self.assertFalse(session_voice_enabled(config, {"tts_enabled": True}))
+
+    def test_keyless_tts_is_opt_in_and_unrelated_keys_do_not_enable_speech(self):
+        config = {
+            "provider_tts_settings": {"enable": True, "provider_id": "edge"},
+            "provider": [
+                {"id": "edge", "enable": True},
+                {"id": "other-speech", "enable": True, "api_key": "test-key"},
+            ],
+        }
+        self.assertFalse(session_voice_enabled(config))
+        self.assertTrue(session_voice_enabled(config, {"tts_enabled": True}))
+
     def test_chat_answer_is_not_followed_by_its_spoken_rephrasing(self):
         examples = [
             (

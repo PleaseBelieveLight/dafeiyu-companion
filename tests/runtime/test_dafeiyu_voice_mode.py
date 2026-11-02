@@ -105,6 +105,72 @@ def fixture(text, session=None, proactive=False, proactive_tts=True, failure=Fal
 
 
 class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_use_key_default_agrees_in_request_delivery_and_status(self):
+        cases = [
+            ("", {}, False),
+            ("test-speech-key", {}, True),
+            ("test-speech-key", {"llm_enabled": True}, True),
+            ("test-speech-key", {"tts_enabled": False}, False),
+            ("", {"tts_enabled": True}, True),
+        ]
+        for api_key, session, enabled in cases:
+            with self.subTest(key_configured=bool(api_key), session=session):
+                plugin, event, result, provider, _, pipeline = fixture("晚上好。", session)
+                event.plain_result.side_effect = lambda text: MessageEventResult(chain=[Plain(text)])
+                config = pipeline.astrbot_config
+                config["provider_tts_settings"]["provider_id"] = "speech"
+                config["provider"] = [
+                    {"id": "speech", "enable": True, "api_key": api_key}
+                ]
+                event.get_message_str.return_value = "用语音说一句晚上好"
+                request = SimpleNamespace(system_prompt="Existing persona.", contexts=[])
+                with (
+                    patch.object(face_module.sp, "get_async", new=AsyncMock(return_value=session)),
+                    patch.object(face_module.sp, "put_async", new=AsyncMock()) as save,
+                ):
+                    await plugin.inject_voice_status(event, request)
+                    expected = "对方明确要求出声" if enabled else "本次不允许语音"
+                    self.assertIn(expected, temporary_text(request))
+                    await plugin.prepare_contextual_reply(event, result)
+                    status = [reply async for reply in plugin.voice_status(event)]
+                    expected = "允许必要的语音" if enabled else "语音已关闭"
+                    self.assertIn(expected, status[0].get_plain_text())
+                    save.assert_not_awaited()
+                self.assertEqual(provider.get_audio.await_count, int(enabled))
+                self.assertEqual(sum(isinstance(c, Record) for c in result.chain), int(enabled))
+                self.assertEqual(result.get_plain_text(), "" if enabled else "晚上好。")
+
+    async def test_explicit_commands_persist_without_overwriting_other_session_settings(self):
+        saved = {"llm_enabled": True}
+
+        async def load(**kwargs):
+            return copy.deepcopy(saved)
+
+        async def save(**kwargs):
+            self.assertEqual(kwargs["key"], "session_service_config")
+            saved.clear()
+            saved.update(copy.deepcopy(kwargs["value"]))
+
+        with (
+            patch.object(face_module.sp, "get_async", new=AsyncMock(side_effect=load)),
+            patch.object(face_module.sp, "put_async", new=AsyncMock(side_effect=save)),
+        ):
+            for enabled, command in [(False, "voice_off"), (True, "voice_on")]:
+                plugin, event, _, _, _, _ = fixture("")
+                replies = [reply async for reply in getattr(plugin, command)(event)]
+                self.assertTrue(replies)
+                self.assertEqual(saved, {"llm_enabled": True, "tts_enabled": enabled})
+                # A fresh instance reads the persisted choice after configuration changes.
+                plugin, event, result, provider, _, pipeline = fixture("晚安。")
+                config = pipeline.astrbot_config
+                config["provider_tts_settings"]["provider_id"] = "speech"
+                config["provider"] = [
+                    {"id": "speech", "enable": True, "api_key": "replacement-key"}
+                ]
+                event.get_message_str.return_value = "用语音说一句晚安"
+                await plugin.prepare_contextual_reply(event, result)
+                self.assertEqual(provider.get_audio.await_count, int(enabled))
+
     async def test_real_pipeline_preserves_selected_channels_without_duplicate_tts(
         self,
     ):

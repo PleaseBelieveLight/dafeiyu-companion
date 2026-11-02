@@ -101,6 +101,28 @@ def parse_voice_reply(raw: str) -> dict[str, str] | None:
     return compact_voice_reply({key: value.get(key, "").strip() for key in ("text", "voice")})
 
 
+def session_voice_enabled(config: dict, session: dict | None = None) -> bool:
+    """Use an explicit session switch, otherwise follow the configured TTS API key.
+
+    Only explicit user choices are persisted. Computing a default must not freeze it
+    before a key is added, changed or removed later.
+    """
+    tts = config.get("provider_tts_settings", {})
+    if not tts.get("enable", False):
+        return False
+    selected = (session or {}).get("tts_enabled")
+    if isinstance(selected, bool):
+        return selected
+    provider_id = tts.get("provider_id")
+    if not provider_id:
+        return False
+    for provider in config.get("provider", []):
+        if provider.get("id") == provider_id and provider.get("enable", False):
+            api_key = provider.get("api_key", "")
+            return isinstance(api_key, str) and bool(api_key.strip())
+    return False
+
+
 def voice_preference(message: str, dialogue=()) -> str:
     """Respect listening conditions and explicit requests without another model call."""
 

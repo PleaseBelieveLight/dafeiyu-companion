@@ -55,6 +55,7 @@ from astrbot.core.utils.voice_reply import (
     compact_voice_reply,
     merge_reply_text,
     parse_voice_reply,
+    session_voice_enabled,
     voice_cooling_down,
     voice_preference,
 )
@@ -893,7 +894,7 @@ class FaceConvertPlugin(Star):
             and (
                 event.get_extra("fy_proactive_tts", True) is True
                 if proactive
-                else session.get("tts_enabled") is True
+                else session_voice_enabled(config, session)
             )
         )
         event.set_extra("_fy_voice_plan", None)
@@ -1402,7 +1403,7 @@ class FaceConvertPlugin(Star):
         allowed = bool(tts_config.get("enable")) and (
             event.get_extra("fy_proactive_tts", True) is True
             if proactive
-            else session.get("tts_enabled") is True
+            else session_voice_enabled(config, session)
         )
         other = [c for c in result.chain if not isinstance(c, Plain)]
         mode = event.get_extra("_fy_voice_mode") or voice_preference(event.get_message_str())
@@ -1610,7 +1611,7 @@ class FaceConvertPlugin(Star):
         )
         text = (
             "普通聊天：允许必要的语音，平时优先文字。"
-            if session.get("tts_enabled") is True
+            if session_voice_enabled(self.context.get_config(event.unified_msg_origin), session)
             else "普通聊天：语音已关闭，只发文字。"
         ) + "主动消息独立允许语音，也优先文字。"
         yield event.plain_result(text)
