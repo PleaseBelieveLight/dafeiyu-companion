@@ -22,6 +22,7 @@ PUBLIC_DIRS = {
     "config",
 }
 PUBLIC_ROOTS = {
+    "AGENTS.md",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
