@@ -1,0 +1,59 @@
+name: Publish release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/validate.yml
+
+  publish:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build checked source archive and release notes
+        shell: pwsh
+        run: |
+          python tools/build_release.py --tag $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed' }
+      - name: Upload assets to a draft, then publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $draft = gh release view $env:RELEASE_TAG --json isDraft --jq '.isDraft' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($draft -eq 'false') {
+              Write-Host "Release $env:RELEASE_TAG is already published; keeping it unchanged."
+              exit 0
+            }
+          } else {
+            gh release create $env:RELEASE_TAG --verify-tag --draft --title $env:RELEASE_TAG --notes-file dist/RELEASE_NOTES.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create release draft' }
+          }
+          gh release upload $env:RELEASE_TAG "dist/dafeiyu-companion-$env:RELEASE_TAG.zip" dist/SHA256SUMS.txt --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload release assets; draft kept for retry' }
+          gh release edit $env:RELEASE_TAG --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish release; draft kept for retry' }
