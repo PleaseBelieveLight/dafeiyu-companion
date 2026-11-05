@@ -3,11 +3,26 @@
 import json
 import re
 import time
+from datetime import datetime
 
 from .state import ConflictError, StateError, _row
 
 CONTEXT_MARKER = "【自主生活当前记录】"
 TOOLS = {"life_recall"}
+EXECUTION_RULES = (
+    "【研究执行事实约束】\n"
+    "研究进度只依据本轮自主生活记录中的实际运行、笔记和检索记录；"
+    "历史聊天、长期记忆里的承诺和待办都不是已执行证据。"
+    "next_step 只是计划，paused 是暂停。worker=idle 时没有研究在执行；"
+    "running 数据库记录也不能替代活跃执行器证据。"
+    "没有新运行或新笔记时，明确说最后执行日期和此后没有新进展，"
+    "不得用‘一直在查但没找到’掩饰没有执行。"
+    "仅 last_search 有真实记录才能说执行过检索；摘要不等于阅读全文或已核实。"
+    "自动推进开启也只代表会按条件尝试，不保证完成或发送；"
+    "普通聊天里的答应、催促、‘我去查’不会创建任务，不能声称已启动。"
+    "未实际启动或未开启相应功能时，不承诺后台继续、明天补齐或查到主动通知。"
+    "资料缺失、手动暂停、失败和额度限制都按记录如实解释，不能编造忙碌理由。"
+)
 
 
 def is_owner_event(event, config):
@@ -195,22 +210,50 @@ class LifeChat:
             for row in episodes
         )
 
-    def context(self, scope):
+    def context(self, scope, *, runtime=None):
+        from .activity_state import SHANGHAI
         from .selection_state import GoalPolicy
         policy = GoalPolicy(self.store)
         goals = self.goals(scope)[:3]
         episodes = self.store.query_episodes(scope, limit=5)
         notes = []
+        execution = []
         for goal in goals:
+            run = self.store.db.execute("""SELECT id,status,started_at,ended_at,summary
+                FROM runs WHERE scope=? AND goal_id=? ORDER BY started_at DESC LIMIT 1""",
+                (scope, goal["id"])).fetchone()
+            latest = dict(run) if run else None
+            if latest:
+                latest["summary"] = latest["summary"][:100]
+                for key in ("started_at", "ended_at"):
+                    if latest[key] is not None:
+                        latest[key] = datetime.fromtimestamp(latest[key], SHANGHAI).isoformat(
+                            timespec="seconds")
+            audit = goal["checkpoint"].get("last_search")
+            if isinstance(audit, dict):
+                audit = {key: value[:300] if isinstance(value, str) else value
+                         for key, value in audit.items() if key in {
+                             "status", "query", "at", "results", "new_sources"}}
+            else:
+                audit = None
+            execution.append({"goal_id": goal["id"], "last_run": latest,
+                              "last_search": audit,
+                              "pause_reason": goal["checkpoint"].get("pause_reason", ""),
+                              "resume_policy": goal["checkpoint"].get("resume_policy", ""),
+                              "last_round_had_new_sources": goal["checkpoint"].get("progress")})
             note = _row(self.store.db.execute("""SELECT * FROM notes WHERE scope=? AND goal_id=?
                 ORDER BY version DESC LIMIT 1""", (scope, goal["id"])).fetchone())
             if note:
                 valid = all(self.store.get_episode(scope, source)
                             for source in note["evidence_ids"])
                 notes.append({"goal_id": goal["id"], "version": note["version"],
+                              "created_at": datetime.fromtimestamp(
+                                  note["created_at"], SHANGHAI).isoformat(timespec="seconds"),
                               "sources_current": valid,
                               "excerpt": note["body"][:400] if valid else "来源已修订，需重写笔记"})
         payload = {
+            "execution": execution,
+            "runtime": runtime or {"worker": "unknown"},
             "goals": [{key: goal[key] for key in (
                 "id", "title", "why", "status", "version", "next_step", "checkpoint",
                 "completion_criteria", "updated_at",

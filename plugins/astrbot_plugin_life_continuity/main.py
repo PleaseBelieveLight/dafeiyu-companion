@@ -1,4 +1,4 @@
-"""Scoped chat and bounded research; all execution remains opt-in and one-shot."""
+"""Scoped chat, read-only retrieval and opt-in daily bounded research."""
 
 import copy
 import json
@@ -9,16 +9,17 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.context_parts import set_temporary_context
 
-from .chat import TOOLS, LifeChat, is_owner_event, parse_command, plain_owner_text
+from .chat import EXECUTION_RULES, TOOLS, LifeChat, is_owner_event, parse_command, plain_owner_text
 from .activity import ActivityEngine
 from .activity_state import SHANGHAI
 from .delivery import DeliveryGate, quiet_now
 from .memory_bridge import MemoryBridge
+from .scheduler import DailyResearch
 from .state import PLUGIN_NAME, LifeStore, StateError
 from .trial import TrialControl
 
 
-@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活有界执行与限频验收，默认关闭", "0.5.0")
+@register(PLUGIN_NAME, "dafeiyu-tools", "自主生活有界研究与每日有限推进，默认关闭", "0.6.0")
 class LifeContinuityPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -29,6 +30,7 @@ class LifeContinuityPlugin(Star):
         self.engine = None
         self.delivery = None
         self.trial = TrialControl(self)
+        self.scheduler = DailyResearch(self)
 
     async def initialize(self):
         register_api = getattr(self.context, "register_web_api", None)
@@ -44,7 +46,10 @@ class LifeContinuityPlugin(Star):
                 self.store, self.context, self.config, self.activity_policy, share=self.share_note,
             )
             self.delivery = DeliveryGate(self.engine.ledger, self.config, self.activity_policy)
-            logger.info("[life_continuity] 存储已就绪；单次活动另受开关控制，没有周期调度。")
+            self.scheduler.start()
+            logger.info("[life_continuity] 存储已就绪；每日推进开关：%s；联网检索开关：%s。",
+                        self.config.get("auto_enabled") is True,
+                        self.config.get("web_search_enabled") is True)
         except Exception:
             # Keep an unavailable optional store from taking down normal chat.
             if self.store is not None:
@@ -53,6 +58,7 @@ class LifeContinuityPlugin(Star):
             logger.exception("[life_continuity] 存储初始化失败，自主生活保持不可用。")
 
     async def terminate(self):
+        await self.scheduler.close()
         if self.store is not None:
             stopped = await self.engine.close() if self.engine is not None else True
             delivered = await self.delivery.close() if self.delivery is not None else True
@@ -127,6 +133,22 @@ class LifeContinuityPlugin(Star):
     def allowed(self, event):
         return self.store is not None and is_owner_event(event, self.config)
 
+    def research_runtime(self):
+        engine = self.engine
+        live = engine is not None and engine.task is not None and not engine.task.done()
+        return {"now": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
+                "worker": ("stopping" if engine.stop_signal.is_set() else "running")
+                          if live else "idle",
+                "active_run_id": engine.job["run_id"] if live and engine.job else None,
+                "activity_enabled": self.config.get("activity_enabled") is True,
+                "web_search_enabled": self.config.get("web_search_enabled") is True,
+                "auto_enabled": self.config.get("auto_enabled") is True,
+                "auto_hour_shanghai": self.config.get("auto_hour", 10),
+                "share_enabled": self.config.get("share_enabled") is True,
+                "scheduler_issue": self.scheduler.last_issue,
+                "budget": engine.ledger.snapshot(self.config.get("owner_scope", ""), self.config)
+                          if engine is not None else None}
+
     def memory_bridge(self):
         if self._memory is not None:
             return self._memory
@@ -168,8 +190,12 @@ class LifeContinuityPlugin(Star):
             req.func_tool = tools
         if not allowed:
             return
+        # Stable execution rules belong in the system prompt, above old promises
+        # recalled from history. Facts stay request-local and are never memorized.
+        req._life_context_block = "\n" + EXECUTION_RULES
+        req.system_prompt = (req.system_prompt or "") + req._life_context_block
         try:
-            block = self.chat.context(event.unified_msg_origin)
+            block = self.chat.context(event.unified_msg_origin, runtime=self.research_runtime())
         except Exception:
             logger.exception("[life_continuity] 经历上下文读取失败，保留正常聊天。")
             block = "自主生活本地记录暂不可用；不得据此声称没有目标或编造进展。"
@@ -231,7 +257,8 @@ class LifeContinuityPlugin(Star):
         identity = (str(message_id)
                     if message_id is not None and type(message_id) is not bool else "")
         if action == "status":
-            return json.dumps(self.engine.ledger.snapshot(scope, self.config), ensure_ascii=False)
+            return json.dumps(self.engine.ledger.snapshot(scope, self.config)
+                              | {"research": self.research_runtime()}, ensure_ascii=False)
         if not identity:
             raise StateError("消息缺少真实标识。")
         if action == "new":
@@ -254,7 +281,7 @@ class LifeContinuityPlugin(Star):
             return "已停止，后续活动保持暂停。" if stopped else "已禁止新活动，在途调用仍待结束或核实。"
         if action == "allow":
             self.engine.ledger.control_update(scope, paused=False)
-            return "已允许后续手动触发；目标的手动暂停仍需单独继续，没有开启周期。"
+            return "已允许后续活动；目标的手动暂停仍需单独继续，自动推进由 auto_enabled 控制。"
         if action == "recover":
             count = self.engine.recover(scope)
             return f"已核对 {count} 条中断运行。未知发送不重试，暂停目标需明确继续。"
@@ -271,7 +298,8 @@ class LifeContinuityPlugin(Star):
         if action == "candidates":
             last = self.store.db.execute("""SELECT goal_id,reason,created FROM goal_choices
                 WHERE scope=? ORDER BY created DESC LIMIT 3""", (scope,)).fetchall()
-            return json.dumps({"candidates": policy.candidates(scope, now),
+            return json.dumps({"candidates": policy.candidates(scope, now,
+                                   allow_empty=self.config.get("web_search_enabled") is True),
                                "recent_choices": [dict(row) for row in last]}, ensure_ascii=False)
         goal = self.chat.resolve_goal(scope, command["target"])
         if action == "interests":

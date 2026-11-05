@@ -15,7 +15,7 @@
     "default": false
   },
   "activity_enabled": {
-    "description": "允许主人单次触发目标选择或有时限的资料研究（不启用周期）",
+    "description": "允许有时限的资料研究；每日自动推进另由 auto_enabled 控制",
     "type": "bool",
     "default": false
   },
@@ -23,6 +23,26 @@
     "description": "允许研究后主动分享摘录，与主动聊天共用额度",
     "type": "bool",
     "default": false
+  },
+  "web_search_enabled": {
+    "description": "每轮先调用一次 AstrBot 当前会话已配置的联网搜索，保存最多三条带来源的摘要",
+    "type": "bool",
+    "default": false
+  },
+  "auto_enabled": {
+    "description": "允许每天最多自动推进一轮已有目标；当天已有手动研究则不再自动启动，失败也不重试",
+    "type": "bool",
+    "default": false
+  },
+  "auto_hour": {
+    "description": "上海时间每天从此小时起，在免打扰结束且聊天冷却后尝试一次；不补跑往日任务",
+    "type": "int",
+    "default": 10
+  },
+  "search_timeout_seconds": {
+    "description": "单次检索超时（1–30秒）；同时受整轮时间预算约束",
+    "type": "int",
+    "default": 15
   },
   "trial_mode": {
     "description": "阶段五严格限频：上海日期每日最多开始一轮，预算与分享不高于默认上限；不启用周期",

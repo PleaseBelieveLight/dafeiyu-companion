@@ -124,11 +124,11 @@ class GoalPolicy:
             WHERE scope=? AND goal_id=?""", (scope, goal_id))
         return {value for row in rows for value in json.loads(row[0])}
 
-    def eligible(self, goal, now):
+    def eligible(self, goal, now, *, allow_empty=False):
         if not goal or not goal["next_step"].strip():
             return False
         sources = research_sources(self.store, goal["scope"], goal["id"])
-        if not sources:
+        if not sources and not allow_empty:
             return False
         if goal["status"] == "ready" or (goal["status"] == "paused"
                 and goal["checkpoint"].get("resume_policy") == "read_only"):
@@ -155,12 +155,12 @@ class GoalPolicy:
             value["score"] = round(value["score"], 3)
         return result
 
-    def candidates(self, scope, now):
+    def candidates(self, scope, now, *, allow_empty=False):
         goals = [_row(row) for row in self.db.execute("""SELECT * FROM goals WHERE scope=?
             AND status NOT IN ('completed','cancelled','abandoned')""", (scope,))]
         result = []
         for goal in goals:
-            if not self.eligible(goal, now):
+            if not self.eligible(goal, now, allow_empty=allow_empty):
                 continue
             profile = self.profile(scope, goal["id"])
             fresh = {fingerprint(row["evidence"]["text"][:2000])

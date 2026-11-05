@@ -150,9 +150,10 @@ class ActivityLedger:
             if not goal or (goal["status"] not in {"ready", "paused", "shelved"}):
                 raise StateError("目标尚不可运行；手动暂停需明确继续，待核实状态需先恢复核对。")
             sources = self.sources(scope, goal_id)
-            if not sources:
+            allow_search = config.get("web_search_enabled") is True
+            if not sources and not allow_search:
                 raise StateError("没有可读取的资料，请先提供该目标的文字来源。")
-            if not self.goals.eligible(goal, now):
+            if not self.goals.eligible(goal, now, allow_empty=allow_search):
                 raise StateError("目标已暂停或搁置，尚不满足重新开启条件。")
             if self.snapshot(scope, config)["remaining_model_calls"] <= 0:
                 raise BudgetExceeded("当天模型调用额度已耗尽。")
@@ -181,12 +182,14 @@ class ActivityLedger:
             self.db.execute("""UPDATE goals SET status='running',version=version+1,updated_at=?
                 WHERE scope=? AND id=?""", (now, scope, goal_id))
             if not selection:
-                self.goals.record_choice(scope, source_id, goal_id, run_id, "主人明确指定目标",
+                self.goals.record_choice(scope, source_id, goal_id, run_id,
+                                         "每日自动推进已有目标" if source_id.startswith(
+                                             "daily-research:") else "主人明确指定目标",
                                          [{"id": goal_id, "version": goal["version"]}], now)
             return {"run_id": run_id, "scope": scope, "goal_id": goal_id,
                     "version": goal["version"] + 1, "duration": cursor - now, "started": now,
                     "goal": goal, "sources": sources, "limits": cfg, "duplicate": False,
-                    "trigger": source_id}
+                    "trigger": source_id, "allow_search": allow_search}
 
     def select(self, job, candidates, decision):
         identity = decision.get("goal_id")
@@ -203,7 +206,8 @@ class ActivityLedger:
             if identity and identity != anchor["id"]:
                 goal = self.store.get_goal(scope, identity)
                 if (not goal or goal["version"] != ids[identity]["version"]
-                        or not self.goals.eligible(goal, now)):
+                        or not self.goals.eligible(goal, now,
+                                                  allow_empty=job.get("allow_search", False))):
                     raise ConflictError("selected goal changed")
                 self.db.execute("""UPDATE goals SET status=?,version=version+1,updated_at=?
                     WHERE scope=? AND id=?""", (job["goal"]["status"], now, scope, anchor["id"]))
@@ -251,6 +255,16 @@ class ActivityLedger:
             self.db.execute("UPDATE activity_calls SET status='returned',usage_json=? WHERE id=?",
                             (_json(usage), identity))
 
+    def record_search(self, job, audit):
+        """Persist retrieval attempts even if no model call or note follows."""
+        with self.store.transaction():
+            goal = self.store.get_goal(job["scope"], job["goal_id"])
+            if goal["status"] != "running" or goal["version"] != job["version"]:
+                raise ConflictError("goal changed during retrieval")
+            checkpoint = dict(goal["checkpoint"], last_search=audit)
+            self.db.execute("UPDATE goals SET checkpoint_json=? WHERE scope=? AND id=?",
+                            (_json(checkpoint), job["scope"], job["goal_id"]))
+
     def finish(self, job, reason, elapsed, *, note=None, source_ids=None, next_step=None,
                manual=False, interest=0):
         now, scope, run_id = self.clock(), job["scope"], job["run_id"]
@@ -279,6 +293,8 @@ class ActivityLedger:
                 checkpoint.update(note_version=version, source_ids=source_ids,
                                   read_ranges=job.get("read_ranges", {}))
                 assessment = self.goals.on_step(job, source_ids, interest, now)
+            else:
+                checkpoint["progress"] = False
             checkpoint.update(last_run_id=run_id, pause_reason=reason,
                               resume_policy="manual" if manual else "read_only")
             status = "paused"
