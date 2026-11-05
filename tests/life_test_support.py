@@ -73,7 +73,10 @@ def load_plugin(folder):
     star.register = lambda *args: lambda cls: cls
     event_api = types.ModuleType("astrbot.api.event")
     event_api.AstrMessageEvent = object
-    decorator = lambda **kwargs: lambda function: function
+
+    def decorator(**kwargs):
+        return lambda function: function
+
     event_api.filter = types.SimpleNamespace(
         on_llm_request=decorator, llm_tool=decorator,
         event_message_type=lambda *args, **kwargs: lambda function: function,

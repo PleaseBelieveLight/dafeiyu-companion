@@ -12,7 +12,6 @@ import uuid
 import zipfile
 from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 
 from workspace import RUNTIME_ROOT, SOURCE_ROOT
 

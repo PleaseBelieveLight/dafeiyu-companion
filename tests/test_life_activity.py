@@ -151,7 +151,7 @@ class BudgetTests(LedgerFixture):
         self.assertEqual(ledger.recover(SCOPE), 0)
 
     def test_recovery_never_revives_a_cancelled_goal(self):
-        job = self.begin()
+        self.begin()
         self.store.db.execute("UPDATE goals SET status='cancelled' WHERE id=?", (self.goal["id"],))
         self.ledger.recover(SCOPE)
         self.assertEqual(self.store.get_goal(SCOPE, self.goal["id"])["status"], "cancelled")

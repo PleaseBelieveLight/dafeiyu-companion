@@ -5,7 +5,6 @@ import json
 import sqlite3
 import sys
 import tempfile
-import types
 import unittest
 from contextlib import closing
 from pathlib import Path
