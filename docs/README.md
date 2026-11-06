@@ -2,7 +2,7 @@
 
 ## 使用
 
-- [项目说明](../README.md) · 安装、启动与目录结构
+- [项目说明](../README.md) · 功能介绍、下载与首次安装
 - [Windows 脚本](../scripts/README.md) · 配置、部署更新、备份与维护
 - [QQ 指令手册](../content/knowledge/指令手册.md) · 日常指令与功能入口
 - [自主生活](../plugins/astrbot_plugin_life_continuity/README.md) · 研究、记忆与实机验收

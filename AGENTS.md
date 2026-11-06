@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 Keep this document in English and update the [Chinese review copy](docs/AGENTS.zh-CN.md) together.
-See [README.md](README.md) for setup and directory layout.
+See [README.md](README.md) for an overview and first-time setup.
 
 ## Workspace
 
@@ -25,9 +25,10 @@ See [README.md](README.md) for setup and directory layout.
 
 ## Documentation
 
-- Keep the root `README.md` concise. Unless explicitly requested otherwise, retain these H2
-  sections in order: `项目简介`, `核心功能`, `部署说明`, `核心目录架构`, `来源与许可`.
-  Link to the owning guide for detailed instructions.
+- Write the root `README.md` as a concise GitHub landing page for readers without programming
+  experience. Choose headings that help readers understand what the project does, what they need
+  to install it, how to try it, and where to get help. Link to the owning guides for technical
+  detail. Keep copyright, license, and third-party attribution aligned with the project notices.
 - Give each topic one maintained guide. Put plugin usage and troubleshooting in its
   `plugins/<plugin_name>/README.md` for the AstrBot admin UI. Keep script guides, asset attribution,
   and licenses with their components. Use `docs/` for project-wide guides and active plans, with
