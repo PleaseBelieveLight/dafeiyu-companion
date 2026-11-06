@@ -169,7 +169,20 @@ ID；如果存在同名歧义，就用 `/life` 返回的完整目标 ID。
 | “已开始”后没主动发研究结果               | 检查目标状态，结束后通过普通聊天询问；`share_enabled` 关闭时不会主动分享                                                               |
 | 记忆显示“结果待核对”或查询只返回本地经历 | 本地记录仍保留，但不能算长期记忆已保存并召回；先查询核验，未知结果不重复写入                                                           |
 
-当前版本仍在实机联调，正常研究闭环、长期记忆保存后召回和真实跨日继续尚待完整验收。 研究成功、记忆保存、记忆召回与
-QQ 实际收到消息分别判断，以实际记录为准。
+### 5. 实机验收与核对
 
-早期阶段文档描述的是当时未开放联网和周期的范围；当前行为以本说明及实际配置、运行记录为准。
+在源码根目录核对安装状态，或查看已有试运行的记录。`<trial_id>` 对应运行目录下 `run/life_trials/` 的记录目录名。
+
+```powershell
+python tools/life_trial.py preflight
+python tools/life_trial.py report --trial-id <trial_id>
+python tools/life_trial.py snapshot --trial-id <trial_id>
+```
+
+记忆保存超时后先用 `python tools/life_trial.py memory-status` 查看写入状态，再用
+`python tools/life_trial.py recall` 核对是否能召回。一次未命中仍按待核实处理，直到有可靠依据确认写入结果。
+待核实期间保留原账本，以同一条经历核对。
+
+实机验收分别核对研究完成和来源、长期记忆保存与召回、QQ 实际收件。跨日继续、前台打断、在途重启和限频观察
+各自需要现场证据。用 `snapshot` 保存检查点，用 `report` 查看观察条件和记录天数，最终验收由人工核对。
+改动影响既有结论时重新验证对应场景。

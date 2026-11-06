@@ -27,21 +27,26 @@ See [README.md](README.md) for setup and directory layout.
 
 - Keep the root `README.md` concise. Unless explicitly requested otherwise, retain these H2
   sections in order: `项目简介`, `核心功能`, `部署说明`, `核心目录架构`, `来源与许可`.
-  Put detailed configuration, development, operations, and validation notes in `docs/`.
-- Keep human-readable guides in `docs/`, indexed by `docs/README.md`, and program inputs in
-  `content/`. Personas, knowledge sources, and acceptance materials remain program inputs even
-  when written in Markdown. Record consumers, read triggers, and change impacts in
+  Link to the owning guide for detailed instructions.
+- Give each topic one maintained guide. Put plugin usage and troubleshooting in its
+  `plugins/<plugin_name>/README.md` for the AstrBot admin UI. Keep script guides, asset attribution,
+  and licenses with their components. Use `docs/` for project-wide guides and active plans, with
+  `docs/README.md` as a short index that links to the owning guides.
+- Update an existing guide first. Add a standalone page only for a distinct recurring need or
+  an active plan. Keep pages at the top of `docs/`. Add an indexed subdirectory only when several
+  maintained pages need it. Record completed phases, one-off investigations, and test runs in
+  commit messages, PRs, or Git history. When a plan closes, move durable instructions, known
+  limits, and open acceptance items into the owning guide, then retire the redundant pages.
+- Keep program inputs in `content/`, including personas, knowledge sources, and acceptance
+  materials written in Markdown. Record consumers, read triggers, and change impacts in
   `content/README.md`, including whether optional templates are read automatically.
 - Startup, knowledge initialization, and acceptance tools must work without `docs/`; documentation
   checks and release scans are exceptions. Keep content used by both people and programs once in
   `content/`, with links from `docs/`.
-- Update existing documents first. Keep standalone documents at the top of `docs/`; create topic
-  folders with a short index only when needed. Avoid duplicate explanations and unnecessary
-  nesting; distinguish historical validation from current behavior.
-- Keep plugin READMEs in `plugins/<plugin_name>/README.md` for the AstrBot admin UI, separate from
-  bot knowledge inputs. Keep script guides, asset attribution, and licenses with their components.
-- When moving or renaming files, update links, indexes, script readers, and knowledge import paths
-  together. Check consumers before changing runtime inputs and update their inventory.
+- Verify documented commands, paths, and defaults against the current source. Label any retained
+  historical measurements with their date and scope. When moving, renaming, or removing files,
+  check references and update links, indexes, script readers, and knowledge import paths together.
+  Check consumers before changing runtime inputs and update their inventory.
 
 ## Validation
 

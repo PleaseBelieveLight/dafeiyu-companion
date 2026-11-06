@@ -32,4 +32,4 @@ python tools/launch.py sync-persona --apply
 
 `chat-usage` 只读查看已接入聊天模型与浏览器的用量；`sync-persona` 默认预览差异，
 加 `--apply` 才会备份并同步源码人格正文。它保留后台工具、技能与开场配置；
-详细的上下文预算和统计边界见 [Token 评审与落地记录](../docs/Token消耗与对话智能评审.md)。
+详细的上下文预算和统计边界见[对话上下文与用量](../docs/Token消耗与对话智能评审.md)。
