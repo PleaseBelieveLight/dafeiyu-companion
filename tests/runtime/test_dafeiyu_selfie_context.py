@@ -158,8 +158,22 @@ class SelfieContextTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.face.inject_voice_status(self.event, request)
         self.assertEqual(request.func_tool.names(), ["web_search"])
-        self.assertIn("此前由你发出的自拍", temporary_text(request))
-        self.assertIn("voice 必须留空", temporary_text(request))
+        context = temporary_text(request)
+        self.assertIn("本轮发出的自拍", context)
+        self.assertIn("本轮自拍已成功发给对方", context)
+        self.assertNotIn("此前由你发出的自拍", context)
+        self.assertNotIn("本轮可用媒体工具：无", context)
+        self.assertNotIn("图片工具仍可按需使用", context)
+        self.assertIn("voice 必须留空", context)
+
+        natural = SimpleNamespace(completion_text="刚拍的，窗边的光正好。")
+        await self.face.scrub_drafts(self.event, natural)
+        self.assertEqual(natural.completion_text, "刚拍的，窗边的光正好。")
+        wrong = SimpleNamespace(
+            completion_text="这轮发不了图，能发图片的工具没给我开。等改天权限开了，再拍张新的给你看。"
+        )
+        await self.face.scrub_drafts(self.event, wrong)
+        self.assertEqual(wrong.completion_text, "喏，给你看～")
         self.generate.assert_awaited_once()
 
     async def test_generation_or_platform_failure_does_not_remember_or_continue(self):

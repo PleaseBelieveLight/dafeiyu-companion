@@ -21,6 +21,8 @@ PARSER = PLUGINS + "astrbot_plugin_parser/main.py"
 MUSIC = PLUGINS + "astrbot_plugin_music/main.py"
 POKE = PLUGINS + "astrbot_plugin_pokepro/main.py"
 OMNIDRAW = PLUGINS + "astrbot_plugin_omnidraw/main.py"
+IMAGE_PROVIDER = PLUGINS + "astrbot_plugin_omnidraw/providers/openai_impl.py"
+IMAGE_RESPONSE = PLUGINS + "astrbot_plugin_omnidraw/providers/base.py"
 VIDEO = PLUGINS + "astrbot_plugin_omnidraw/core/video_manager.py"
 STEALER = PLUGINS + "astrbot_plugin_stealer/"
 STEALER_MAIN = STEALER + "main.py"
@@ -29,7 +31,7 @@ INTERACTION_PLUGINS = ("parser", "music", "pokepro", "omnidraw", "stealer")
 PLUGIN_CONFIGS = ("proactive_chat", "stealer", "life_continuity", "pokepro")
 CONFIG_PATHS = tuple(f"astrbot/data/config/astrbot_plugin_{name}_config.json" for name in PLUGIN_CONFIGS)
 EXPERIENCE_PATHS = (PROACTIVE_MAIN, PROACTIVE_START, PROACTIVE_FLOW, PIPELINE, RESPOND, QQ_EVENT,
-                    INTERNAL, AGENT_HOOKS, PARSER, MUSIC, POKE, OMNIDRAW, VIDEO,
+                    INTERNAL, AGENT_HOOKS, PARSER, MUSIC, POKE, OMNIDRAW, IMAGE_PROVIDER, IMAGE_RESPONSE, VIDEO,
                     STEALER_MAIN, STEALER_EVENTS, *CONFIG_PATHS)
 
 
@@ -203,6 +205,36 @@ def apply_experience(target, *, reverse=False):
              '                self._complete_image_quota(event, reserved_count, 1)\n                return\n'
              '            await event.send(event.chain_result(\n'
              '                self._build_image_success_components(result, time.perf_counter() - started_at)\n'),
+        )
+    if (target / IMAGE_PROVIDER).is_file():
+        patch(target, IMAGE_PROVIDER,
+            ('from typing import Any\n', 'from typing import Any\nfrom urllib.parse import urlsplit\n'),
+            ('        api_kwargs = self.filter_api_kwargs(kwargs)\n',
+             '        api_kwargs = self.filter_api_kwargs(kwargs)\n'
+             '        endpoint = urlsplit(base_url)\n'
+             '        if (endpoint.hostname == "ark.cn-beijing.volces.com"\n'
+             '                and endpoint.path.rstrip("/") == "/api/v3/images/generations"):\n'
+             '            # Deliver inline image bytes without a second request to the storage host.\n'
+             '            api_kwargs.setdefault("response_format", "b64_json")\n'),
+        )
+        patch(target, IMAGE_RESPONSE,
+            ('    def likely_base64(value: str) -> bool:\n'
+             '        text = value.strip()\n'
+             '        if len(text) < 80:\n            return False\n'
+             '        if not re.fullmatch(r"[A-Za-z0-9+/=\\s]+", text):\n            return False\n'
+             '        try:\n            base64.b64decode(text, validate=False)\n            return True\n'
+             '        except Exception:\n            return False\n',
+             '    def base64_image_kind(text: str) -> str:\n'
+             '        if len(text) < 80 or not re.fullmatch(r"[A-Za-z0-9+/=\\s]+", text):\n            return ""\n'
+             '        try:\n            payload = base64.b64decode(text, validate=False)\n'
+             '        except Exception:\n            return ""\n'
+             '        return _image_kind(payload) or "png"\n'),
+            ('            if assume_base64 and likely_base64(text):\n'
+             '                return "data:image/png;base64," + re.sub(r"\\s+", "", text)\n',
+             '            if assume_base64:\n'
+             '                kind = base64_image_kind(text)\n'
+             '                if kind:\n'
+             '                    return f"data:image/{kind};base64," + re.sub(r"\\s+", "", text)\n'),
         )
     if (target / VIDEO).is_file():
         patch(target, VIDEO,
