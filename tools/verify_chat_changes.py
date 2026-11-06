@@ -17,7 +17,8 @@ import zipfile
 from pathlib import Path
 
 from workspace import RUNTIME_ROOT, SOURCE_ROOT
-from patch_chat_efficiency import apply_chat_efficiency
+from patch_chat_boundaries import MEMORY_SCOPE, PATCHED_PATHS, apply_chat_boundaries
+from patch_chat_efficiency import apply_chat_efficiency, apply_memory_recall_focus
 from persona_sync import source_prompt
 
 
@@ -35,13 +36,16 @@ def reference_source(stage, commit):
     return source
 
 
-def save_dialogue_baseline(source, provider, module, commit):
+def save_dialogue_baseline(source, stage, provider, module, commit):
     digest = hashlib.sha256()
     for folder in (source / "plugins", source / "overlays/astrbot"):
         for path in sorted(folder.rglob("*.py")):
             digest.update(path.relative_to(source).as_posix().encode() + b"\0" + path.read_bytes())
     for path in (source / PERSONA_PATH, provider, Path(module.__file__), Path(module.memory_module.__file__)):
         digest.update(path.read_bytes())
+    for relative in PATCHED_PATHS:
+        digest.update((stage / relative).read_bytes())
+    digest.update((stage / MEMORY_SCOPE).read_bytes())
     signature = digest.hexdigest()
     folder = (SOURCE_ROOT / ".verification/dialogue-baseline").resolve()
     if not folder.is_relative_to(SOURCE_ROOT.resolve()):
@@ -82,12 +86,19 @@ def main(argv=None):
         logging.disable(logging.CRITICAL)
         shutil.copytree(SOURCE_ROOT / "assets/selfie-references",
                         stage / "data/plugin_data/astrbot_plugin_omnidraw/selfie_references")
-        target = stage / "astrbot/astrbot/core/provider/sources/openai_source.py"
-        target.parent.mkdir(parents=True)
-        shutil.copy2(runtime / "astrbot/core/provider/sources/openai_source.py", target)
-        apply_chat_efficiency(stage)
-        plugins = stage / "plugins"
         ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".git")
+        staged_package = stage / "astrbot/astrbot"
+        shutil.copytree(runtime / "astrbot", staged_package, ignore=ignore)
+        shutil.copytree(source / "overlays/astrbot/astrbot", staged_package, dirs_exist_ok=True, ignore=ignore)
+        target = staged_package / "core/provider/sources/openai_source.py"
+        staged_plugins = stage / "astrbot/data/plugins"
+        shutil.copytree(runtime / "data/plugins/astrbot_plugin_livingmemory",
+                        staged_plugins / "astrbot_plugin_livingmemory", ignore=ignore)
+        apply_chat_efficiency(stage)
+        apply_memory_recall_focus(stage)
+        if (source / "overlays/astrbot/astrbot/core/utils/chat_scope.py").is_file():
+            apply_chat_boundaries(stage)
+        plugins = staged_plugins
         shutil.copytree(runtime / "data/plugins/astrbot_plugin_proactive_chat",
                         plugins / "astrbot_plugin_proactive_chat", ignore=ignore)
         shutil.copytree(source / "overlays/astrbot/data/plugins",
@@ -95,14 +106,9 @@ def main(argv=None):
         shutil.copytree(source / "plugins", plugins, dirs_exist_ok=True, ignore=ignore)
 
         sys.path.insert(0, str(runtime))
-        import astrbot.core.utils
-        import astrbot.core.provider.sources
+        sys.path.insert(0, str(staged_package.parent))
         import data.plugins
         import tests
-        astrbot.core.utils.__path__ = [str(source / "overlays/astrbot/astrbot/core/utils"),
-                                      *astrbot.core.utils.__path__]
-        astrbot.core.provider.sources.__path__ = [str(target.parent),
-                                                 *astrbot.core.provider.sources.__path__]
         data.plugins.__path__ = [str(plugins), *data.plugins.__path__]
         tests.__path__ = [str(SOURCE_ROOT / "tests/runtime"), *tests.__path__]
         replay = None
@@ -116,7 +122,7 @@ def main(argv=None):
             ])
         result = unittest.TextTestRunner(verbosity=1).run(suite)
         if replay is not None and result.wasSuccessful():
-            save_dialogue_baseline(source, target, replay, commit)
+            save_dialogue_baseline(source, stage, target, replay, commit)
         return 0 if result.wasSuccessful() else 1
 
 

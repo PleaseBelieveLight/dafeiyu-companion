@@ -94,6 +94,8 @@ async def search_web(context, event, query, timeout):
     try:
         async with asyncio.timeout(timeout):
             payload = await tool().call(wrapper, query=query, **{count_key: 3})
+        if isinstance(payload, str) and payload.startswith("Error:") and payload.endswith("does not return any results."):
+            return []
         return normalize_results(payload)
     except SearchError:
         raise
@@ -106,31 +108,86 @@ async def search_web(context, event, query, timeout):
 
 async def foreground_search(store, event, text, query, lookup):
     """Reserve a real chat event before querying; reuse its result after retries."""
-    event_id = getattr(event.message_obj, "message_id", None)
-    if not isinstance(event_id, (str, int)) or isinstance(event_id, bool) or not str(event_id).strip():
+    identity = foreground_identity(event)
+    if identity is None:
         return {"status": "missing_event"}
-    identity = (event.unified_msg_origin, str(event_id))
     signature = hashlib.sha256(text.encode()).hexdigest()
     with store.transaction():
         # The optional journal is additive and leaves existing research tables intact.
         store.db.execute("""CREATE TABLE IF NOT EXISTS foreground_searches (
             scope TEXT NOT NULL, event_id TEXT NOT NULL, signature TEXT NOT NULL,
             receipt TEXT, PRIMARY KEY(scope,event_id))""")
+        store.db.execute("""CREATE TABLE IF NOT EXISTS foreground_replies (
+            scope TEXT NOT NULL, event_id TEXT NOT NULL, status TEXT NOT NULL,
+            message_id TEXT, PRIMARY KEY(scope,event_id))""")
         old = store.db.execute("""SELECT signature,receipt FROM foreground_searches
             WHERE scope=? AND event_id=?""", identity).fetchone()
         if old:
             if old["signature"] != signature:
                 return {"status": "conflicting_event"}
             return json.loads(old["receipt"]) if old["receipt"] else {"status": "unconfirmed"}
-        if not query:
-            return {"status": "needs_topic"}
         store.db.execute("INSERT INTO foreground_searches VALUES (?,?,?,NULL)", (*identity, signature))
+        store.db.execute("INSERT INTO foreground_replies VALUES (?,?,'ready',NULL)", identity)
     try:
-        results = await lookup(query)
-        receipt = {"status": "returned" if results else "empty", "query": query, "results": results}
+        if query:
+            results = await lookup(query)
+            receipt = {"status": "returned" if results else "empty", "query": query, "results": results}
+        else:
+            receipt = {"status": "needs_topic"}
     except SearchError as exc:
         receipt = {"status": exc.reason, "query": query}
+    except Exception:
+        receipt = {"status": "unconfirmed", "query": query}
     with store.transaction():
         store.db.execute("UPDATE foreground_searches SET receipt=? WHERE scope=? AND event_id=?",
                          (json.dumps(receipt, ensure_ascii=False), *identity))
     return receipt
+
+
+def foreground_identity(event):
+    event_id = getattr(event.message_obj, "message_id", None)
+    if type(event_id) not in (str, int) or not str(event_id).strip():
+        return None
+    return event.unified_msg_origin, str(event_id)
+
+
+def search_reply(receipt):
+    status = receipt["status"]
+    if status == "returned":
+        snippets = [f"{row['title'] or '网页摘要'}\n「{' '.join(row['text'].split())[:200]}」\n{row['url']}"
+                    for row in receipt["results"][:3]]
+        return "我查到这些公开摘要。能确认的范围就到这里。\n\n" + "\n\n".join(snippets)
+    return {
+        "needs_topic": "你想让我现在查哪件事？",
+        "empty": "这次没查到能用的公开资料，先别下结论。",
+        "search_timeout": "这次查超时了，没拿到结果。",
+        "search_unavailable": "这会儿用不了搜索，没法替你核实。",
+        "search_invalid_response": "搜索回来了，但没有可核对的结果。",
+        "previous_work_unconfirmed": "前一项查询还没收尾，这次没再发起搜索。",
+    }.get(status, "这次查询没拿到可核对的结果。")
+
+
+async def deliver_search_reply(store, event, text, receipt, dispatch):
+    identity = foreground_identity(event)
+    if identity is None or receipt["status"] == "conflicting_event":
+        return None
+    signature = hashlib.sha256(text.encode()).hexdigest()
+    with store.transaction():
+        ready = store.db.execute("""UPDATE foreground_replies SET status='sending'
+            WHERE scope=? AND event_id=? AND status='ready' AND EXISTS (
+                SELECT 1 FROM foreground_searches AS search
+                WHERE search.scope=foreground_replies.scope AND search.event_id=foreground_replies.event_id
+                    AND search.signature=? AND search.receipt IS NOT NULL)""", (*identity, signature)).rowcount
+        if not ready:
+            return None
+        saved = store.db.execute("SELECT receipt FROM foreground_searches WHERE scope=? AND event_id=?", identity)
+        receipt = json.loads(saved.fetchone()[0])
+    message_id = None
+    try:
+        reply = search_reply(receipt)
+        message_id = await dispatch(reply)
+    finally:
+        with store.transaction():
+            store.db.execute("UPDATE foreground_replies SET status=?,message_id=? WHERE scope=? AND event_id=?",
+                             ("sent" if message_id else "uncertain", message_id, *identity))
+    return reply if message_id else None

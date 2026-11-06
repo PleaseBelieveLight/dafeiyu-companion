@@ -44,9 +44,12 @@ def preserve_local_programs() -> None:
 
 def managed_paths() -> list[Path]:
     """Identify the installed code and configuration touched by deployment."""
+    from patch_chat_boundaries import MEMORY_SCOPE, PATCHED_PATHS
     from patch_chat_efficiency import MEMORY_RECALL_PATH
 
     paths = []
+    paths.extend(ROOT / relative for relative in PATCHED_PATHS)
+    paths.append(ROOT / MEMORY_SCOPE)
     for folder in (SOURCE_ROOT / "overlays").iterdir():
         for path in folder.rglob("*"):
             if path.is_file() and "__pycache__" not in path.parts:

@@ -77,7 +77,7 @@ def recent_user_texts(req):
                 break
             body = next((part.get("text") for part in body if isinstance(part, dict)
                          and part.get("type") == "text" and not part.get("_no_save")), None)
-        if not isinstance(body, str) or body == "Output your last task result below.":
+        if not isinstance(body, str):
             continue
         texts.append(body.strip().rstrip("？?。！!"))
     return texts
@@ -226,6 +226,9 @@ def parse_command(text):
     if match:
         return {"action": {"暂停": "pause", "继续": "resume", "取消": "cancel"}[match[1]],
                 "target": match[2].strip(), "content": ""}
+    match = re.fullmatch(r"(?:现在(?:就)?|马上|立刻)(?:推进|运行)(?:研究)?目标\s+([^\n]+)", text)
+    if match:
+        return {"action": "run", "target": match[1].strip()}
     match = re.fullmatch(r"(调整目标|关于目标)\s+([^：:\n]+)[：:]\s*(.+)", text)
     if match:
         return {"action": "adjust" if match[1] == "调整目标" else "feedback",

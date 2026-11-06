@@ -255,9 +255,13 @@ def without_internal_cron_history(messages):
             result = messages[index + 1]
             if isinstance(result, dict) and result.get("role") == "assistant":
                 note = message_text(result)
-                if note.startswith("[CronJob] ") and re.search(
+                cron = note.startswith("[CronJob] ") and re.search(
                     r" triggered at (?:\d{4}-\d{2}-\d{2}T[^\s,]+|unknown time),", note
-                ):
+                )
+                background = note.startswith("[BackgroundTask] ") and re.search(
+                    r" \(task_id=[^\s)]+\) finished\. Result: ", note
+                )
+                if cron or background:
                     index += 2
                     continue
         kept.append(entry)

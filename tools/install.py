@@ -177,12 +177,14 @@ def apply_overlays(target: Path) -> None:
     from patch_selfie_context import apply_selfie_context
     from patch_selfie_references import apply_selfie_references
     from patch_music import apply_music
+    from patch_chat_boundaries import apply_chat_boundaries
     from patch_chat_efficiency import apply_chat_efficiency, apply_memory_recall_focus
 
     apply_selfie_context(target)
     apply_selfie_references(target)
     apply_music(target)
     apply_chat_efficiency(target)
+    apply_chat_boundaries(target)
     apply_memory_recall_focus(target)
     runtime_tests = target / "astrbot/tests"
     runtime_tests.mkdir(parents=True, exist_ok=True)

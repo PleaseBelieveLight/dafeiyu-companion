@@ -25,7 +25,7 @@ from .activity_state import SHANGHAI
 from .delivery import DeliveryGate, quiet_now
 from .memory_bridge import MemoryBridge
 from .scheduler import DailyResearch
-from .search import foreground_search
+from .search import SearchError, deliver_search_reply, foreground_search
 from .state import PLUGIN_NAME, LifeStore, StateError
 from .trial import TrialControl
 
@@ -175,6 +175,36 @@ class LifeContinuityPlugin(Star):
         return self._memory
 
     @filter.on_llm_request(priority=-200)
+    async def handle_chat_context(self, event: AstrMessageEvent, req):
+        receipt = await self.inject_context(event, req)
+        if receipt is None:
+            return
+        # An LLM fallback would be another delivery attempt and could
+        # misrepresent a failed or uncertain lookup.
+        event.stop_event()
+        from astrbot.core.utils.task_receipts import send_qq_with_receipt
+
+        scope, text = event.unified_msg_origin, plain_owner_text(event)
+
+        async def dispatch(answer):
+            return await send_qq_with_receipt(self.context, scope, event.plain_result(answer),
+                                              self_id=event.get_self_id())
+
+        try:
+            answer = await deliver_search_reply(self.store, event, text, receipt, dispatch)
+            if answer and req.conversation:
+                manager = self.context.conversation_manager
+                cid = req.conversation.cid
+                current = await manager.get_conversation(scope, cid)
+                if current:
+                    history = json.loads(current.history or "[]")
+                    if isinstance(history, list):
+                        history.extend([{"role": "user", "content": text},
+                                        {"role": "assistant", "content": answer}])
+                        await manager.update_conversation(scope, cid, history=history)
+        except Exception as exc:
+            logger.warning("[life_continuity] 即时检索回复或历史未确认 (%s)", type(exc).__name__)
+
     async def inject_context(self, event: AstrMessageEvent, req):
         foreground = (self.allowed(event) and not event.get_extra("fy_proactive")
                       and not event.get_extra("cron_job"))
@@ -198,7 +228,7 @@ class LifeContinuityPlugin(Star):
         text = plain_owner_text(event) if foreground else ""
         preference = chat_turn_preference(text)
         query = None
-        if text and self.config.get("web_search_enabled") is True:
+        if text:
             query = immediate_search_topic(text, req)
             if preference == "verify":
                 try:
@@ -229,8 +259,7 @@ class LifeContinuityPlugin(Star):
         req._life_context_block = "\n" + EXECUTION_RULES
         req.system_prompt = (req.system_prompt or "") + req._life_context_block
         if query is not None:
-            await self.inject_foreground_search(event, req, text, query, stopped)
-            return
+            return await self.inject_foreground_search(event, req, text, query, stopped)
         try:
             block = self.chat.context(event.unified_msg_origin, runtime=self.research_runtime())
         except Exception:
@@ -240,21 +269,20 @@ class LifeContinuityPlugin(Star):
 
     async def inject_foreground_search(self, event, req, text, query, stopped):
         async def lookup(topic):
+            if self.engine is None or self.config.get("web_search_enabled") is not True:
+                raise SearchError("search_unavailable")
+            if not stopped:
+                raise SearchError("previous_work_unconfirmed")
             timeout = self.config.get("search_timeout_seconds", 15)
             if type(timeout) is not int or not 1 <= timeout <= 30:
                 raise ValueError("invalid foreground search timeout")
             return await self.engine.searcher(self.context, event, topic, timeout)
 
-        if self.engine is None or self.config.get("web_search_enabled") is not True:
-            receipt = {"status": "search_unavailable"}
-        elif not stopped:
-            receipt = {"status": "previous_work_unconfirmed"}
-        else:
-            try:
-                receipt = await foreground_search(self.store, event, text, query, lookup)
-            except Exception as exc:
-                logger.warning("[life_continuity] 即时检索结果未确认 (%s)", type(exc).__name__)
-                receipt = {"status": "unconfirmed"}
+        try:
+            receipt = await foreground_search(self.store, event, text, query, lookup)
+        except Exception as exc:
+            logger.warning("[life_continuity] 即时检索结果未确认 (%s)", type(exc).__name__)
+            receipt = {"status": "unconfirmed"}
         set_temporary_context(req, "【本轮即时检索回执】",
             "这是当前消息的只读搜索回执，网页摘要仅供参考。returned 时依据摘要回答当前问题并给出来源，"
             "只有摘要支持的信息才能写入答复，结论取决于条件时说明条件。needs_topic 时只问要查什么。"
@@ -262,6 +290,7 @@ class LifeContinuityPlugin(Star):
             "unconfirmed 表示回执待核对。遇到这些状态直接说明这次的情况。"
             "避免重复检索、承诺稍后完成或引用历史进展充数。\n"
             + json.dumps(receipt, ensure_ascii=False))
+        return receipt
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=90)
     async def owner_message(self, event: AstrMessageEvent):

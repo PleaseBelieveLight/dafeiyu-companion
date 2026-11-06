@@ -289,19 +289,9 @@ def apply():
     config["agent_runner"]["config"]["model"]["provider_id"] = "deepseek_chat"
     config["agent_runner"]["config"]["persona"]["persona_id"] = "大肥鱼"
     config["agent_runner"]["config"]["misc"].update({"max_steps": 40, "tool_call_timeout": 300})
-    groups_umo = ["qq:GroupMessage:" + value for value in groups]
-    config.setdefault("provider_ltm_settings", {}).update(
-        {
-            "group_icl_enable": True,
-            "group_message_history_enable": True,
-            "active_reply": {
-                "enable": bool(groups),
-                "method": "possibility_reply",
-                "possibility_reply": 0.3,
-                "whitelist": groups_umo,
-            },
-        }
-    )
+    from patch_chat_boundaries import configure_group_settings
+
+    configure_group_settings(config)
     config["kb_names"] = ["大肥鱼手册", "热梗词典"]
     write_json(DATA / "cmd_config.json", config)
 
