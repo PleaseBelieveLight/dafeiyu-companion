@@ -35,12 +35,23 @@ IMMEDIATE_SEARCH = re.compile(
     r"(?:查(?:一下|一查|查)?|搜(?:一下|一搜|搜)?)(?P<topic>[^\n]*)"
 )
 SEARCH_TOPIC = re.compile(
-    r"(?:(?:请|麻烦)?(?:帮我)?(?:联网|上网)?(?:查一下|查一查|查查|搜一下|搜一搜|搜搜)"
+    r"(?:(?:请|麻烦)?(?:帮我)?(?P<web>联网|上网|网上)?(?:查一下|查一查|查查|搜一下|搜一搜|搜搜)"
     r"(?P<query>[^\n]+)|(?P<subject>[^，。！？?!\n]{2,36}?)(?:你|的)?研究"
     r"(?:到哪(?:了|儿了)?|得怎么样(?:了)?|明白了没有|进度(?:如何|怎么样)?))"
 )
 ACKNOWLEDGMENT = re.compile(r"(?:嗯+|好(?:的|吧|啊)?|行|对|收到|别忘了)(?:[，,、 ]*(?:别忘了|继续|接着来))?")
 REFERENCED_TOPIC = re.compile(r"(?:刚才|上面|上次)?(?:这个|那个|这件事|那件事|这份资料|那份资料)|刚才说的")
+PRIVATE_LOOKUP = re.compile(
+    r"本机|本地|(?:配置|代码|日志|数据库|文件)(?:里|中)|聊天记录|密码|验证码|密钥|api[ _-]?key",
+    re.IGNORECASE,
+)
+PRIVATE_VERIFICATION = re.compile(
+    r"https?://|@|\d{6,}|私聊|内部|截图|附件|我(?:家|的|们的|公司|同事|朋友)", re.I,
+)
+SUBJECT_QUESTION = re.compile(
+    r"(?P<subject>[\w《》· -]{2,32}?)(?:打[得的]?过|能打赢|能赢|怎么|如何|是否|什么时候|是什么|有没有|会不会)"
+    r"[^，,。；;：:？！?!\r\n]{0,96}"
+)
 
 
 def recent_user_texts(req):
@@ -82,6 +93,34 @@ def research_question(text, req):
     return bool(RESEARCH_QUESTION.search(preceding))
 
 
+def verification_search_topic(req, goals):
+    """Resolve a request for accuracy to a recent explicit public search or known public goal."""
+    previous = next((line for line in recent_user_texts(req)
+                     if not ACKNOWLEDGMENT.fullmatch(line)), "")
+    if PRIVATE_LOOKUP.search(previous) or PRIVATE_VERIFICATION.search(previous):
+        return None
+    explicit = SEARCH_TOPIC.fullmatch(previous)
+    if explicit and explicit["web"] and explicit["query"]:
+        return explicit["query"].strip()[:180] or None
+    question = SUBJECT_QUESTION.fullmatch(previous)
+    if not question:
+        return None
+    subject = question["subject"].strip()
+    if len(subject) < 2:
+        return None
+    matches = set()
+    for goal in goals:
+        title = goal["title"]
+        audit = goal["checkpoint"].get("last_search")
+        if (subject in title and not PRIVATE_LOOKUP.search(title) and isinstance(audit, dict)
+                and audit.get("status") == "returned" and isinstance(audit.get("query"), str)
+                and title in audit["query"]):
+            matches.add(title)
+    if len(matches) == 1:
+        return f"{next(iter(matches))} {previous}"[:180]
+    return None
+
+
 def immediate_search_topic(text, req):
     """Return None for other chat and an empty string for an ambiguous lookup."""
     match = IMMEDIATE_SEARCH.fullmatch(text.rstrip("。！？?!"))
@@ -97,8 +136,7 @@ def immediate_search_topic(text, req):
             topic = (prior["query"] or prior["subject"]).strip()
     if topic in {"吗", "嘛", "么", "吧", "什么", "一下", "资料"}:
         return ""
-    if re.search(r"本机|本地|(?:配置|代码|日志|数据库|文件)(?:里|中)|聊天记录|密码|验证码|密钥|api[ _-]?key",
-                 topic, re.IGNORECASE):
+    if PRIVATE_LOOKUP.search(topic):
         return None
     return topic[:180]
 

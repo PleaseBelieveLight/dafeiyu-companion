@@ -32,7 +32,8 @@ class ToolSet:
 
 class ContextPartTests(unittest.TestCase):
     def test_media_placeholders_and_local_repairs_do_not_trigger_long_term_recall(self):
-        for query in ("[对方发来一张图片或表情包]", "[图片] [Image 1: montage]", " 怎么回事？！", "然后呢"):
+        for query in ("[对方发来一张图片或表情包]", "[图片] [Image 1: montage]", " 怎么回事？！", "然后呢",
+                      "不知道说啥，只能找你解解闷了", "给我个准确结果吧", "那你猜一猜谁能赢"):
             with self.subTest(query=query):
                 self.assertTrue(skip_automatic_recall(query))
         for query in ("怎么回事，上周那次研究为什么停了", "[图片] 你还记得上次的猫吗", "帮我找以前聊过的解法"):

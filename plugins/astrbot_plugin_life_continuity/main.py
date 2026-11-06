@@ -7,7 +7,7 @@ from datetime import datetime
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.core.utils.context_parts import set_temporary_context
+from astrbot.core.utils.context_parts import chat_turn_preference, set_temporary_context
 
 from .chat import (
     EXECUTION_RULES,
@@ -18,6 +18,7 @@ from .chat import (
     parse_command,
     plain_owner_text,
     research_question,
+    verification_search_topic,
 )
 from .activity import ActivityEngine
 from .activity_state import SHANGHAI
@@ -195,16 +196,33 @@ class LifeContinuityPlugin(Star):
         set_temporary_context(req, "【自主生活本轮资料】", "")
         set_temporary_context(req, "【本轮即时检索回执】", "")
         text = plain_owner_text(event) if foreground else ""
-        query = (immediate_search_topic(text, req)
-                 if text and self.config.get("web_search_enabled") is True else None)
+        preference = chat_turn_preference(text)
+        query = None
+        if text and self.config.get("web_search_enabled") is True:
+            query = immediate_search_topic(text, req)
+            if preference == "verify":
+                try:
+                    query = verification_search_topic(req, self.chat.goals(event.unified_msg_origin))
+                except Exception:
+                    logger.warning("[life_continuity] 无法确认求证请求对应的公开主题。")
+        hint = ""
+        if preference == "guess":
+            hint = "对方明确想听你的猜测。给出自己的倾向和一两条理由，把依据和猜测分开。"
+        elif preference == "verify":
+            hint = ("对方要准确结果。结合他刚才问的问题，优先在本轮完成核对。指代不清时只问要核对哪一点。"
+                    "可直接计算或推理时给出依据。需要公开资料时，依据已确认的公开主题和本轮检索回执核实，"
+                    "需要补查可使用获准的只读工具。"
+                    "说明能确定的条件和仍待确认的部分。后续承诺以实际安排为准。")
+        set_temporary_context(req, "【本轮回答方式】", hint)
         related = foreground and research_question(text, req)
         # Request-local copy: hiding our tools must not mutate the global set.
         if getattr(req, "func_tool", None) is not None:
+            allow_search_tools = query is None and preference != "guess"
             tools = copy.copy(req.func_tool)
             tools.tools = [tool for tool in req.func_tool.tools
                            if (related or tool.name not in TOOLS)
-                           and (query is None or (not tool.name.startswith("web_search_")
-                                                 and tool.name != "browser_task"))]
+                           and (allow_search_tools or (not tool.name.startswith("web_search_")
+                                                       and tool.name != "browser_task"))]
             req.func_tool = tools
         if not related and query is None:
             return
@@ -239,7 +257,7 @@ class LifeContinuityPlugin(Star):
                 receipt = {"status": "unconfirmed"}
         set_temporary_context(req, "【本轮即时检索回执】",
             "这是当前消息的只读搜索回执，网页摘要仅供参考。returned 时依据摘要回答当前问题并给出来源，"
-            "只有摘要支持的信息才能写入答复。needs_topic 时只问要查什么。"
+            "只有摘要支持的信息才能写入答复，结论取决于条件时说明条件。needs_topic 时只问要查什么。"
             "empty 表示没有可用摘要，search_timeout 表示超时，search_unavailable 表示搜索服务不可用，"
             "unconfirmed 表示回执待核对。遇到这些状态直接说明这次的情况。"
             "避免重复检索、承诺稍后完成或引用历史进展充数。\n"

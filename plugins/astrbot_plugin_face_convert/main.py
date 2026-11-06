@@ -28,7 +28,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core import file_token_service, sp
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.run_context import ContextWrapper
-from astrbot.core.utils.context_parts import set_temporary_context
+from astrbot.core.utils.context_parts import chat_turn_preference, set_temporary_context
 from astrbot.core.message.components import At, Face, Image, Plain, Record, Reply, Video
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.utils.image_reply import (
@@ -866,6 +866,16 @@ class FaceConvertPlugin(Star):
             )
         ]
         req.extra_user_content_parts.append(TextPart(text=image_turn_reminder(req)).mark_as_temp())
+
+    @filter.on_llm_request()
+    async def inject_company_style(self, event: AstrMessageEvent, req) -> None:
+        components = event.get_messages()
+        text = "".join(part.text for part in components) if all(isinstance(p, Plain) for p in components) else ""
+        casual = (not event.get_extra("fy_proactive") and not event.get_extra("cron_job")
+                  and chat_turn_preference(text) == "company")
+        hint = ("对方来找你解闷。自己先抛一个具体话头、小玩笑或能接着玩的梗，"
+                "把第一句说出来，给对方轻松接下去的余地。" if casual else "")
+        set_temporary_context(req, "【本轮陪聊】", hint)
 
     @filter.on_llm_request()
     async def inject_voice_status(self, event: AstrMessageEvent, req) -> None:

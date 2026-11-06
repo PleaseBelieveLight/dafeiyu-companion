@@ -32,6 +32,7 @@ def main():
             "tests.test_dafeiyu_proactive_context",
             "tests.test_dafeiyu_context_state",
             "tests.test_dafeiyu_provider_budget",
+            "tests.test_dafeiyu_dialogue_replay",
             "-q",
         ],
         cwd=ROOT / "astrbot",

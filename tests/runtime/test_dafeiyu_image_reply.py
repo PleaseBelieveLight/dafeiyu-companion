@@ -97,6 +97,26 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(req.system_prompt.count(face_module.IMAGE_REPLY_MARKER), 1)
         self.assertEqual(len(req.extra_user_content_parts), 1)
 
+    async def test_bare_meme_treats_its_caption_as_picture_evidence(self):
+        caption = TextPart(text="<image_caption>卡通人物举着‘没钱了’的牌子。</image_caption>")
+        req = ProviderRequest(prompt="[对方发来一张图片或表情包]", extra_user_content_parts=[caption])
+        await self.plugin.inject_image_reply_style(self.event(), req)
+        self.assertIn("用户自己确认后", req.system_prompt)
+        self.assertIs(req.extra_user_content_parts[0], caption)
+
+    async def test_company_turn_adds_a_temporary_lead_without_a_topic_menu(self):
+        text = "不知道说啥，只能找你解解闷了"
+        req = ProviderRequest(prompt=text, system_prompt="原有人格")
+        await self.plugin.inject_company_style(self.event([Plain(text)]), req)
+        self.assertEqual(req.system_prompt, "原有人格")
+        assembled = await req.assemble_context()
+        self.assertIn("自己先抛一个具体", str(assembled))
+        saved = dump_messages_with_checkpoints(bind_checkpoint_messages([assembled]))
+        self.assertEqual([part["text"] for part in saved[0]["content"]], [text])
+
+        await self.plugin.inject_company_style(self.event([Plain("帮我找个解闷的游戏")]), req)
+        self.assertEqual(req.extra_user_content_parts, [])
+
     async def test_runtime_hint_reaches_provider_but_is_not_saved_as_user_speech(self):
         caption = TextPart(text="<image_caption>哭脸</image_caption>")
         req = ProviderRequest(

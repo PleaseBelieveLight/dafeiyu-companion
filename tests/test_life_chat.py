@@ -294,6 +294,56 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.inject_context(FakeEvent("现在就查"), self.request())
         self.plugin.engine.searcher.assert_awaited_once_with(self.plugin.context, event, "建造机制", 15)
 
+    async def test_verification_followup_checks_known_public_topic_but_guess_does_not(self):
+        self.plugin.config["web_search_enabled"] = True
+        goal = self.plugin.store.create_goal(SCOPE, "matchup", "星港对战铁卫攻略", "研究理由", "条件", "下一步")
+        self.plugin.store.db.execute("UPDATE goals SET checkpoint_json=? WHERE id=?", (
+            json.dumps({"last_search": {"status": "returned", "query": "星港对战铁卫攻略"}}), goal["id"],
+        ))
+        self.plugin.engine.searcher = AsyncMock(return_value=[{
+            "title": "对线资料", "url": "https://example.com/guide", "text": "公开资料摘要",
+        }])
+        request = self.request()
+        request.contexts = [{"role": "user", "content": "铁卫打得过游侠吗？"},
+                            {"role": "assistant", "content": "我现在只有个大概印象。"}]
+        event = FakeEvent("我相信你，你给我个准确结果吧")
+        await self.plugin.inject_context(event, request)
+        self.plugin.engine.searcher.assert_awaited_once_with(
+            self.plugin.context, event, "星港对战铁卫攻略 铁卫打得过游侠吗", 15,
+        )
+        self.assertIn("example.com/guide", str(request.extra_user_content_parts))
+        self.assertEqual(self.plugin.store.get_goal(SCOPE, goal["id"])["status"], "ready")
+
+        request.func_tool.tools.append(types.SimpleNamespace(name="web_search_anysearch"))
+        await self.plugin.inject_context(FakeEvent("那你猜一猜谁能赢", event_id="guess"), request)
+        self.plugin.engine.searcher.assert_awaited_once()
+        self.assertIn("给出自己的倾向", str(request.extra_user_content_parts))
+        self.assertNotIn("example.com/guide", str(request.extra_user_content_parts))
+        self.assertNotIn("web_search_anysearch", [tool.name for tool in request.func_tool.tools])
+
+    async def test_verification_followup_respects_topic_changes_and_local_questions(self):
+        self.plugin.config["web_search_enabled"] = True
+        self.plugin.engine.searcher = AsyncMock()
+        for topic in ("这个本地日志怎么解释？", "123 乘 456 等于多少？", "查一下订单状态", "晚上吃面"):
+            with self.subTest(topic=topic):
+                request = self.request()
+                request.contexts = [{"role": "user", "content": "查一下公开资料"},
+                                    {"role": "user", "content": topic}]
+                await self.plugin.inject_context(FakeEvent("给我个准确结果"), request)
+                self.assertIn("本轮完成核对", str(request.extra_user_content_parts))
+                self.assertNotIn("本轮即时检索回执", str(request.extra_user_content_parts))
+        self.plugin.engine.searcher.assert_not_awaited()
+
+    async def test_verification_followup_reuses_an_explicit_web_topic(self):
+        self.plugin.config["web_search_enabled"] = True
+        self.plugin.engine.searcher = AsyncMock(return_value=[])
+        request = self.request()
+        request.contexts = [{"role": "user", "content": "帮我联网查一下公开赛事的时间"}]
+        event = FakeEvent("核实一下")
+        await self.plugin.inject_context(event, request)
+        self.plugin.engine.searcher.assert_awaited_once_with(self.plugin.context, event, "公开赛事的时间", 15)
+        self.assertIn('"status": "empty"', str(request.extra_user_content_parts))
+
     async def test_immediate_search_clarifies_after_topic_change_and_ignores_untrusted_input(self):
         self.plugin.config["web_search_enabled"] = True
         self.plugin.engine.searcher = AsyncMock()
