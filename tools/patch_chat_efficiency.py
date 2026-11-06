@@ -13,6 +13,15 @@ PREPARE = (
     "            self, payloads, tools, conversation_id=conversation_id\n"
     "        )\n"
 )
+MEMORY_RECALL_PATH = (
+    "astrbot/data/plugins/astrbot_plugin_livingmemory/core/event_handler_modules/memory_recall.py"
+)
+MEMORY_IMPORT = "from astrbot.core.utils.context_parts import skip_automatic_recall\n"
+MEMORY_GUARD = (
+    "                if skip_automatic_recall(actual_query):\n"
+    "                    logger.info(\"本轮缺少独立检索主题，跳过自动长期记忆召回\")\n"
+    "                    return\n\n"
+)
 
 
 def apply_chat_efficiency(target: Path) -> None:
@@ -39,6 +48,25 @@ def apply_chat_efficiency(target: Path) -> None:
                         "                self, self.client.chat.completions.create,\n")
     path.write_text(text, encoding="utf-8")
     configure_policy(target)
+
+
+def apply_memory_recall_focus(target: Path) -> None:
+    """Keep LivingMemory storage and explicit tools, and skip ungrounded automatic recall."""
+    path = target / MEMORY_RECALL_PATH
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8-sig")
+    if MEMORY_IMPORT in text or MEMORY_GUARD in text:
+        if text.count(MEMORY_IMPORT) != 1 or text.count(MEMORY_GUARD) != 1:
+            raise RuntimeError("The LivingMemory focus patch is incomplete")
+        return
+    import_anchor = "from astrbot.core.agent.message import TextPart\n"
+    guard_anchor = "                # 获取过滤配置\n"
+    if text.count(import_anchor) != 1 or text.count(guard_anchor) != 1:
+        raise RuntimeError("The pinned LivingMemory recall boundaries no longer match")
+    text = text.replace(import_anchor, import_anchor + MEMORY_IMPORT, 1)
+    text = text.replace(guard_anchor, MEMORY_GUARD + guard_anchor, 1)
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def configure_policy(target: Path) -> None:

@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "overlays/astrbot/astrbot/core/utils"))
 sys.path.insert(0, str(ROOT / "tools"))
 import chat_efficiency as policy
-from context_parts import set_temporary_context
-from patch_chat_efficiency import apply_chat_efficiency, configure_policy
+from context_parts import set_temporary_context, skip_automatic_recall
+from patch_chat_efficiency import MEMORY_RECALL_PATH, apply_chat_efficiency, apply_memory_recall_focus, configure_policy
 from model_usage import attach_browser_metering
 from chat_usage import report
 
@@ -31,6 +31,14 @@ class ToolSet:
 
 
 class ContextPartTests(unittest.TestCase):
+    def test_media_placeholders_and_local_repairs_do_not_trigger_long_term_recall(self):
+        for query in ("[对方发来一张图片或表情包]", "[图片] [Image 1: montage]", " 怎么回事？！", "然后呢"):
+            with self.subTest(query=query):
+                self.assertTrue(skip_automatic_recall(query))
+        for query in ("怎么回事，上周那次研究为什么停了", "[图片] 你还记得上次的猫吗", "帮我找以前聊过的解法"):
+            with self.subTest(query=query):
+                self.assertFalse(skip_automatic_recall(query))
+
     def test_replacement_is_local_temporary_and_does_not_remove_real_user_data(self):
         user = {"type": "text", "text": "[state]\nuser quoted this"}
         other = {"type": "text", "text": "[other]", "_no_save": True}
@@ -59,6 +67,18 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         self.logger = patch.dict(sys.modules, {"astrbot": types.SimpleNamespace(logger=Mock())})
         self.logger.start()
         self.addCleanup(self.logger.stop)
+
+    async def test_legacy_cron_pair_is_removed_only_from_outgoing_context(self):
+        original = {"role": "user", "content": "Output your last task result below."}
+        visible = {"role": "assistant", "content": "这里是用户真实问答"}
+        cron = {"role": "assistant", "content": "[CronJob] 测试 triggered at 2026-11-06T10:00:00+08:00, 任务内部结果"}
+        messages = [original, visible, original, cron, {"role": "user", "content": "早安"}]
+        request = {"messages": messages}
+        provider = types.SimpleNamespace(provider_config={})
+        result, _ = await policy.prepare_chat_payload(provider, request, None)
+        self.assertEqual(result["messages"], [original, visible, messages[-1]])
+        self.assertEqual(request["messages"], messages)
+        self.assertIn(cron, messages)
 
     def payload(self, rounds=20):
         messages = [{"role": "system", "content": "stable persona"}]
@@ -244,6 +264,30 @@ class AccountingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PatchTests(unittest.TestCase):
+    def test_memory_focus_patch_is_after_storage_and_before_retrieval(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / MEMORY_RECALL_PATH
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "from astrbot.core.agent.message import TextPart\n\n"
+                "async def handler(actual_query):\n"
+                "    if actual_query:\n"
+                "        if True:\n"
+                "            if True:\n"
+                "                await store_message()\n"
+                "                # 获取过滤配置\n"
+                "                await search_memories()\n",
+                encoding="utf-8",
+            )
+            apply_memory_recall_focus(root)
+            first = path.read_text(encoding="utf-8")
+            apply_memory_recall_focus(root)
+            self.assertEqual(first, path.read_text(encoding="utf-8"))
+            self.assertLess(first.index("await store_message()"), first.index("if skip_automatic_recall"))
+            self.assertLess(first.index("if skip_automatic_recall"), first.index("await search_memories()"))
+            compile(first, str(path), "exec")
+
     def test_deployed_policy_and_user_overrides_survive_repeated_updates(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

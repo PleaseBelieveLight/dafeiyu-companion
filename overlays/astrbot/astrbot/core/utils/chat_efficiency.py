@@ -243,6 +243,28 @@ def source_rounds(rounds):
     return result
 
 
+def without_internal_cron_history(messages):
+    """Drop only the pinned AstrBot scheduler's paired legacy record from a working view."""
+    kept = []
+    index = 0
+    while index < len(messages):
+        entry = messages[index]
+        if (index + 1 < len(messages) and isinstance(entry, dict)
+                and entry.get("role") == "user"
+                and message_text(entry) == "Output your last task result below."):
+            result = messages[index + 1]
+            if isinstance(result, dict) and result.get("role") == "assistant":
+                note = message_text(result)
+                if note.startswith("[CronJob] ") and re.search(
+                    r" triggered at (?:\d{4}-\d{2}-\d{2}T[^\s,]+|unknown time),", note
+                ):
+                    index += 2
+                    continue
+        kept.append(entry)
+        index += 1
+    return kept if len(kept) != len(messages) else messages
+
+
 async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None, path=None):
     """Compact only a copied wire payload, at most one incremental summary per call."""
     settings = getattr(provider, "provider_config", {}).get("companion_context", {})
@@ -251,6 +273,10 @@ async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None
         # summary output cap at the wire boundary, where it actually takes effect.
         return dict(payload, max_tokens=SUMMARY_MAX_TOKENS.get(),
                     response_format={"type": "json_object"}), tools
+    messages = payload.get("messages", [])
+    visible = without_internal_cron_history(messages)
+    if visible is not messages:
+        payload = dict(payload, messages=visible)
     if not isinstance(settings, dict) or settings.get("enabled") is not True:
         return payload, tools
     cfg = dict(DEFAULT_POLICY, **settings)
@@ -260,7 +286,7 @@ async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None
             cfg[name] = max(low, min(high, int(cfg[name])))
         except (TypeError, ValueError, OverflowError):
             cfg[name] = DEFAULT_POLICY[name]
-    messages = payload.get("messages", [])
+    messages = visible
     if cfg.get("route_simple_chat_tools"):
         tools = route_tools(messages, tools)
     estimate_payload = dict(payload)

@@ -14,8 +14,7 @@ from patch_chat_efficiency import apply_chat_efficiency
 
 def main():
     runtime = RUNTIME_ROOT / "astrbot"
-    parent = (RUNTIME_ROOT / "temp").resolve()
-    parent.mkdir(parents=True, exist_ok=True)
+    parent = Path(tempfile.gettempdir()).resolve()
     with tempfile.TemporaryDirectory(prefix="chat-verification-", dir=parent) as folder:
         stage = Path(folder).resolve()
         if not stage.is_relative_to(parent):

@@ -9,12 +9,22 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.context_parts import set_temporary_context
 
-from .chat import EXECUTION_RULES, TOOLS, LifeChat, is_owner_event, parse_command, plain_owner_text
+from .chat import (
+    EXECUTION_RULES,
+    TOOLS,
+    LifeChat,
+    immediate_search_topic,
+    is_owner_event,
+    parse_command,
+    plain_owner_text,
+    research_question,
+)
 from .activity import ActivityEngine
 from .activity_state import SHANGHAI
 from .delivery import DeliveryGate, quiet_now
 from .memory_bridge import MemoryBridge
 from .scheduler import DailyResearch
+from .search import foreground_search
 from .state import PLUGIN_NAME, LifeStore, StateError
 from .trial import TrialControl
 
@@ -165,41 +175,75 @@ class LifeContinuityPlugin(Star):
 
     @filter.on_llm_request(priority=-200)
     async def inject_context(self, event: AstrMessageEvent, req):
-        if self.engine is not None and self.allowed(event):
-            identity = str(getattr(event.message_obj, "message_id", ""))
-            if not identity.startswith("proactive"):
-                try:
-                    self.engine.ledger.control_update(event.unified_msg_origin, chat=True)
-                except Exception:
-                    logger.warning("[life_continuity] 无法保存聊天冷却，仍停止后台并保留正常聊天。")
-                try:
-                    await self.engine.stop("foreground")
-                except Exception:
-                    logger.warning("[life_continuity] 后台停止状态待核对，保留正常聊天。")
+        foreground = (self.allowed(event) and not event.get_extra("fy_proactive")
+                      and not event.get_extra("cron_job"))
+        stopped = True
+        if self.engine is not None and foreground:
+            try:
+                self.engine.ledger.control_update(event.unified_msg_origin, chat=True)
+            except Exception:
+                logger.warning("[life_continuity] 无法保存聊天冷却，仍停止后台并保留正常聊天。")
+            try:
+                stopped = await self.engine.stop("foreground")
+            except Exception:
+                stopped = False
+                logger.warning("[life_continuity] 后台停止状态待核对，保留正常聊天。")
         previous = getattr(req, "_life_context_block", "")
         if previous:
             req.system_prompt = (req.system_prompt or "").replace(previous, "", 1)
             req._life_context_block = ""
         set_temporary_context(req, "【自主生活本轮资料】", "")
-        allowed = self.allowed(event)
+        set_temporary_context(req, "【本轮即时检索回执】", "")
+        text = plain_owner_text(event) if foreground else ""
+        query = (immediate_search_topic(text, req)
+                 if text and self.config.get("web_search_enabled") is True else None)
+        related = foreground and research_question(text, req)
         # Request-local copy: hiding our tools must not mutate the global set.
         if getattr(req, "func_tool", None) is not None:
             tools = copy.copy(req.func_tool)
             tools.tools = [tool for tool in req.func_tool.tools
-                           if allowed or tool.name not in TOOLS]
+                           if (related or tool.name not in TOOLS)
+                           and (query is None or (not tool.name.startswith("web_search_")
+                                                 and tool.name != "browser_task"))]
             req.func_tool = tools
-        if not allowed:
+        if not related and query is None:
             return
-        # Stable execution rules belong in the system prompt, above old promises
-        # recalled from history. Facts stay request-local and are never memorized.
         req._life_context_block = "\n" + EXECUTION_RULES
         req.system_prompt = (req.system_prompt or "") + req._life_context_block
+        if query is not None:
+            await self.inject_foreground_search(event, req, text, query, stopped)
+            return
         try:
             block = self.chat.context(event.unified_msg_origin, runtime=self.research_runtime())
         except Exception:
             logger.exception("[life_continuity] 经历上下文读取失败，保留正常聊天。")
             block = "自主生活本地记录暂不可用；不得据此声称没有目标或编造进展。"
         set_temporary_context(req, "【自主生活本轮资料】", block)
+
+    async def inject_foreground_search(self, event, req, text, query, stopped):
+        async def lookup(topic):
+            timeout = self.config.get("search_timeout_seconds", 15)
+            if type(timeout) is not int or not 1 <= timeout <= 30:
+                raise ValueError("invalid foreground search timeout")
+            return await self.engine.searcher(self.context, event, topic, timeout)
+
+        if self.engine is None or self.config.get("web_search_enabled") is not True:
+            receipt = {"status": "search_unavailable"}
+        elif not stopped:
+            receipt = {"status": "previous_work_unconfirmed"}
+        else:
+            try:
+                receipt = await foreground_search(self.store, event, text, query, lookup)
+            except Exception as exc:
+                logger.warning("[life_continuity] 即时检索结果未确认 (%s)", type(exc).__name__)
+                receipt = {"status": "unconfirmed"}
+        set_temporary_context(req, "【本轮即时检索回执】",
+            "这是当前消息的只读搜索回执，网页摘要仅供参考。returned 时依据摘要回答当前问题并给出来源，"
+            "只有摘要支持的信息才能写入答复。needs_topic 时只问要查什么。"
+            "empty 表示没有可用摘要，search_timeout 表示超时，search_unavailable 表示搜索服务不可用，"
+            "unconfirmed 表示回执待核对。遇到这些状态直接说明这次的情况。"
+            "避免重复检索、承诺稍后完成或引用历史进展充数。\n"
+            + json.dumps(receipt, ensure_ascii=False))
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=90)
     async def owner_message(self, event: AstrMessageEvent):

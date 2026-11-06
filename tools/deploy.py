@@ -44,6 +44,8 @@ def preserve_local_programs() -> None:
 
 def managed_paths() -> list[Path]:
     """Identify the installed code and configuration touched by deployment."""
+    from patch_chat_efficiency import MEMORY_RECALL_PATH
+
     paths = []
     for folder in (SOURCE_ROOT / "overlays").iterdir():
         for path in folder.rglob("*"):
@@ -67,6 +69,7 @@ def managed_paths() -> list[Path]:
         ROOT / "astrbot/data/mcp_server.json",
         ROOT / "astrbot/astrbot/core/provider/func_tool_manager.py",
         ROOT / "astrbot/astrbot/core/provider/sources/openai_source.py",
+        ROOT / MEMORY_RECALL_PATH,
         ROOT / "astrbot/data/cmd_config.json",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/main.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/pages/插件配置/app.js",

@@ -17,12 +17,90 @@ EXECUTION_RULES = (
     "running 数据库记录也不能替代活跃执行器证据。"
     "没有新运行或新笔记时，明确说最后执行日期和此后没有新进展，"
     "不得用‘一直在查但没找到’掩饰没有执行。"
-    "仅 last_search 有真实记录才能说执行过检索；摘要不等于阅读全文或已核实。"
+    "检索事实依据本轮即时检索回执或 last_search；摘要不等于阅读全文或已核实。"
     "自动推进开启也只代表会按条件尝试，不保证完成或发送；"
     "普通聊天里的答应、催促、‘我去查’不会创建任务，不能声称已启动。"
     "未实际启动或未开启相应功能时，不承诺后台继续、明天补齐或查到主动通知。"
     "资料缺失、手动暂停、失败和额度限制都按记录如实解释，不能编造忙碌理由。"
 )
+
+RESEARCH_QUESTION = re.compile(
+    r"自主生活|研究.{0,5}(?:进度|目标|计划|到哪|明白|怎么样|得如何)|最近在研究"
+)
+RESEARCH_FOLLOWUP = re.compile(
+    r"(?:所以)?(?:怎么样|如何|有结果|有进展|查完|查到了?|查到什么)(?:了|没有|了吗|吗)?[？?。]?"
+)
+IMMEDIATE_SEARCH = re.compile(
+    r"(?:请|麻烦)?(?:你)?(?:帮我)?(?:现在(?:就)?|马上|立刻|直接)\s*(?:联网|上网)?"
+    r"(?:查(?:一下|一查|查)?|搜(?:一下|一搜|搜)?)(?P<topic>[^\n]*)"
+)
+SEARCH_TOPIC = re.compile(
+    r"(?:(?:请|麻烦)?(?:帮我)?(?:联网|上网)?(?:查一下|查一查|查查|搜一下|搜一搜|搜搜)"
+    r"(?P<query>[^\n]+)|(?P<subject>[^，。！？?!\n]{2,36}?)(?:你|的)?研究"
+    r"(?:到哪(?:了|儿了)?|得怎么样(?:了)?|明白了没有|进度(?:如何|怎么样)?))"
+)
+ACKNOWLEDGMENT = re.compile(r"(?:嗯+|好(?:的|吧|啊)?|行|对|收到|别忘了)(?:[，,、 ]*(?:别忘了|继续|接着来))?")
+REFERENCED_TOPIC = re.compile(r"(?:刚才|上面|上次)?(?:这个|那个|这件事|那件事|这份资料|那份资料)|刚才说的")
+
+
+def recent_user_texts(req):
+    """Read only the last few actual user turns for a short follow-up."""
+    history = getattr(req, "contexts", None)
+    if not history:
+        history = getattr(getattr(req, "conversation", None), "history", None)
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except ValueError:
+            return []
+    if not isinstance(history, list):
+        return []
+    texts = []
+    for entry in reversed(history[-12:]):
+        if not isinstance(entry, dict) or entry.get("role") != "user":
+            continue
+        body = entry.get("content")
+        if isinstance(body, list):
+            # A media-only turn can change the subject, so stop there.
+            if any(isinstance(part, dict) and part.get("type") == "image_url" for part in body):
+                break
+            body = next((part.get("text") for part in body if isinstance(part, dict)
+                         and part.get("type") == "text" and not part.get("_no_save")), None)
+        if not isinstance(body, str) or body == "Output your last task result below.":
+            continue
+        texts.append(body.strip().rstrip("？?。！!"))
+    return texts
+
+
+def research_question(text, req):
+    if RESEARCH_QUESTION.search(text):
+        return True
+    if not RESEARCH_FOLLOWUP.fullmatch(text):
+        return False
+    preceding = next((line for line in recent_user_texts(req)
+                      if not ACKNOWLEDGMENT.fullmatch(line)), "")
+    return bool(RESEARCH_QUESTION.search(preceding))
+
+
+def immediate_search_topic(text, req):
+    """Return None for other chat and an empty string for an ambiguous lookup."""
+    match = IMMEDIATE_SEARCH.fullmatch(text.rstrip("。！？?!"))
+    if not match:
+        return None
+    topic = match["topic"].strip(" ，,：:")
+    if not topic or REFERENCED_TOPIC.fullmatch(topic):
+        topic = ""
+        preceding = next((line for line in recent_user_texts(req)
+                          if not ACKNOWLEDGMENT.fullmatch(line)), "")
+        prior = SEARCH_TOPIC.fullmatch(preceding)
+        if prior:
+            topic = (prior["query"] or prior["subject"]).strip()
+    if topic in {"吗", "嘛", "么", "吧", "什么", "一下", "资料"}:
+        return ""
+    if re.search(r"本机|本地|(?:配置|代码|日志|数据库|文件)(?:里|中)|聊天记录|密码|验证码|密钥|api[ _-]?key",
+                 topic, re.IGNORECASE):
+        return None
+    return topic[:180]
 
 
 def is_owner_event(event, config):

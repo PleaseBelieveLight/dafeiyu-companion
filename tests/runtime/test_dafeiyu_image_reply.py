@@ -176,10 +176,11 @@ class ImageDialogueTests(unittest.TestCase):
             ],
         )
         text = image_turn_reminder(req)
-        for expected in ("今天上班好累", "先歇会儿"):
-            self.assertIn(expected, text)
-        for omitted in ("不属于对话", "运行时间", "private-file", "base64", "不保存的摘录", "工具返回"):
+        self.assertIn("今天上班好累", text)
+        for omitted in ("先歇会儿", "不属于对话", "运行时间", "private-file", "base64", "不保存的摘录", "工具返回"):
             self.assertNotIn(omitted, text)
+        req.prompt = "看看你刚才说的表情"
+        self.assertIn("先歇会儿", image_turn_reminder(req))
 
     def test_consecutive_images_keep_last_user_topic_and_stay_bounded(self):
         history = [{"role": "user", "content": "上班好累"}]

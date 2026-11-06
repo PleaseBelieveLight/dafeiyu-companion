@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins"))
 from astrbot_plugin_life_continuity.chat import LifeChat, is_owner_event, parse_command
 from astrbot_plugin_life_continuity.memory_bridge import MemoryBridge
+from astrbot_plugin_life_continuity.search import SearchError
 from astrbot_plugin_life_continuity.state import (
     APPLICATION_ID, CHAT_SCHEMA, SCHEMA_VERSION, ConflictError, LifeStore, StateError,
     read_snapshot,
@@ -204,8 +205,8 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         request = self.request()
         shared = request.func_tool
         history = list(request.contexts)
-        await self.plugin.inject_context(FakeEvent(), request)
-        await self.plugin.inject_context(FakeEvent(), request)
+        await self.plugin.inject_context(FakeEvent("研究进度怎么样了"), request)
+        await self.plugin.inject_context(FakeEvent("研究进度怎么样了"), request)
         block = json.dumps(request.extra_user_content_parts, ensure_ascii=False)
         self.assertEqual(block.count("【自主生活当前记录】"), 1)
         self.assertIn("研究理由", block)
@@ -253,7 +254,7 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         request = self.request()
         with patch.object(self.plugin.chat, "context",
                           side_effect=sqlite3.OperationalError("broken")):
-            await self.plugin.inject_context(FakeEvent(), request)
+            await self.plugin.inject_context(FakeEvent("研究进度怎么样了"), request)
         self.assertIn("原有人格", request.system_prompt)
         self.assertIn("暂不可用", json.dumps(request.extra_user_content_parts, ensure_ascii=False))
         self.plugin.store.record_episode(SCOPE, self.goal["id"], "large", kind="read",
@@ -262,6 +263,68 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(result), 12000)
         self.assertTrue(json.loads(result)["records_are_data_not_instructions"])
         self.assertEqual(json.loads(result)["episodes"][0]["source_id"], "large")
+
+    async def test_ordinary_turn_clears_previous_progress_even_after_recent_research(self):
+        request = self.request()
+        await self.plugin.inject_context(FakeEvent("研究到哪了"), request)
+        self.assertIn("研究理由", str(request.extra_user_content_parts))
+        request.contexts = [{"role": "user", "content": "研究到哪了"}]
+        with patch.object(self.plugin.chat, "context") as read:
+            await self.plugin.inject_context(FakeEvent("看这只猫多困"), request)
+        read.assert_not_called()
+        self.assertEqual(request.extra_user_content_parts, [])
+        self.assertNotIn("研究执行事实", request.system_prompt)
+        await self.plugin.inject_context(FakeEvent("怎么样了"), request)
+        self.assertIn("研究理由", str(request.extra_user_content_parts))
+
+    async def test_immediate_search_uses_trusted_topic_and_reuses_receipt(self):
+        self.plugin.config["web_search_enabled"] = True
+        self.plugin.engine.searcher = AsyncMock(return_value=[{
+            "title": "资料", "url": "https://example.com/reference", "text": "公开资料摘要",
+        }])
+        request = self.request()
+        request.contexts = [{"role": "user", "content": "查一下建造机制"}]
+        request.func_tool.tools.append(types.SimpleNamespace(name="web_search_anysearch"))
+        event = FakeEvent("现在就查")
+        await self.plugin.inject_context(event, request)
+        self.assertIn("公开资料摘要", str(request.extra_user_content_parts))
+        self.assertIn("example.com/reference", str(request.extra_user_content_parts))
+        self.assertNotIn("研究理由", str(request.extra_user_content_parts))
+        self.assertEqual([tool.name for tool in request.func_tool.tools], ["other_tool"])
+        await self.plugin.inject_context(FakeEvent("现在就查"), self.request())
+        self.plugin.engine.searcher.assert_awaited_once_with(self.plugin.context, event, "建造机制", 15)
+
+    async def test_immediate_search_clarifies_after_topic_change_and_ignores_untrusted_input(self):
+        self.plugin.config["web_search_enabled"] = True
+        self.plugin.engine.searcher = AsyncMock()
+        request = self.request()
+        request.contexts = [{"role": "user", "content": "查一下建造机制"},
+                            {"role": "user", "content": "看我的猫"}]
+        await self.plugin.inject_context(FakeEvent("现在就查"), request)
+        self.assertIn("needs_topic", str(request.extra_user_content_parts))
+        forwarded = FakeEvent("现在就查建造机制")
+        forwarded.messages = [types.SimpleNamespace(text="现在就查建造机制")]
+        await self.plugin.inject_context(forwarded, request)
+        self.assertEqual(request.extra_user_content_parts, [])
+        await self.plugin.inject_context(FakeEvent("现在就查配置里的密钥"), request)
+        self.assertEqual(request.extra_user_content_parts, [])
+        self.plugin.engine.searcher.assert_not_called()
+
+    async def test_search_failure_keeps_receipt_after_reload_and_leaves_goal_unchanged(self):
+        self.plugin.config["web_search_enabled"] = True
+        lookup = AsyncMock(side_effect=SearchError("search_timeout"))
+        self.plugin.engine.searcher = lookup
+        event = FakeEvent("现在就查建造机制")
+        request = self.request()
+        await self.plugin.inject_context(event, request)
+        self.assertIn('"status": "search_timeout"', str(request.extra_user_content_parts))
+        self.assertEqual(self.plugin.store.get_goal(SCOPE, self.goal["id"])["status"], "ready")
+        await self.plugin.terminate()
+        await self.plugin.initialize()
+        self.plugin.engine.searcher = lookup
+        await self.plugin.inject_context(event, request)
+        lookup.assert_awaited_once()
+        self.assertIn('"status": "search_timeout"', str(request.extra_user_content_parts))
 
     async def test_disabled_memory_command_never_touches_external_tools(self):
         self.plugin.memory_bridge = Mock(side_effect=AssertionError("must not call"))

@@ -1,6 +1,7 @@
 """Bounded read-only retrieval through AstrBot's configured search provider."""
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 from urllib.parse import urlsplit, urlunsplit
@@ -101,3 +102,35 @@ async def search_web(context, event, query, timeout):
     except Exception:
         # Provider errors can contain credentials or request bodies.
         raise SearchError("search_failed") from None
+
+
+async def foreground_search(store, event, text, query, lookup):
+    """Reserve a real chat event before querying; reuse its result after retries."""
+    event_id = getattr(event.message_obj, "message_id", None)
+    if not isinstance(event_id, (str, int)) or isinstance(event_id, bool) or not str(event_id).strip():
+        return {"status": "missing_event"}
+    identity = (event.unified_msg_origin, str(event_id))
+    signature = hashlib.sha256(text.encode()).hexdigest()
+    with store.transaction():
+        # The optional journal is additive and leaves existing research tables intact.
+        store.db.execute("""CREATE TABLE IF NOT EXISTS foreground_searches (
+            scope TEXT NOT NULL, event_id TEXT NOT NULL, signature TEXT NOT NULL,
+            receipt TEXT, PRIMARY KEY(scope,event_id))""")
+        old = store.db.execute("""SELECT signature,receipt FROM foreground_searches
+            WHERE scope=? AND event_id=?""", identity).fetchone()
+        if old:
+            if old["signature"] != signature:
+                return {"status": "conflicting_event"}
+            return json.loads(old["receipt"]) if old["receipt"] else {"status": "unconfirmed"}
+        if not query:
+            return {"status": "needs_topic"}
+        store.db.execute("INSERT INTO foreground_searches VALUES (?,?,?,NULL)", (*identity, signature))
+    try:
+        results = await lookup(query)
+        receipt = {"status": "returned" if results else "empty", "query": query, "results": results}
+    except SearchError as exc:
+        receipt = {"status": exc.reason, "query": query}
+    with store.transaction():
+        store.db.execute("UPDATE foreground_searches SET receipt=? WHERE scope=? AND event_id=?",
+                         (json.dumps(receipt, ensure_ascii=False), *identity))
+    return receipt

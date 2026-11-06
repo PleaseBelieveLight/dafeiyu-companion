@@ -227,8 +227,8 @@ class TruthfulChatTests(unittest.IsolatedAsyncioTestCase):
                 plugin.store.start_run(SCOPE, goal["id"], goal["version"], "old-run")
                 request = types.SimpleNamespace(system_prompt="原有人格", func_tool=None,
                     contexts=[{"role": "assistant", "content": "我明天一定查到就告诉你"}])
-                await plugin.inject_context(FakeEvent(), request)
-                await plugin.inject_context(FakeEvent(), request)
+                await plugin.inject_context(FakeEvent("研究进度怎么样了"), request)
+                await plugin.inject_context(FakeEvent("研究进度怎么样了"), request)
                 self.assertEqual(request.system_prompt.count("【研究执行事实约束】"), 1)
                 self.assertIn(EXECUTION_RULES, request.system_prompt)
                 content = json.dumps(request.extra_user_content_parts, ensure_ascii=False)
