@@ -7,6 +7,7 @@ import secrets
 import sys
 
 from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
+from patch_chat_efficiency import CHAT_MODALITIES
 
 ASTRO = ROOT / "astrbot"
 DATA = ASTRO / "data"
@@ -215,7 +216,7 @@ def apply():
             "provider_type": "chat_completion",
             "model": settings["deepseek_model"],
             "enable": bool(chat_key),
-            "modalities": ["text", "image"],
+            "modalities": list(CHAT_MODALITIES),
             "custom_extra_body": {"thinking": {"type": "disabled"}},
             "companion_context": context_policy,
         },

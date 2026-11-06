@@ -318,12 +318,18 @@ class PatchTests(unittest.TestCase):
             root = Path(folder)
             path = root / "astrbot/data/cmd_config.json"
             path.parent.mkdir(parents=True)
-            original = {"provider": [{"id": "deepseek_chat", "key": "private-value"},
-                                     {"id": "vision", "model": "keep-model"}],
-                        "other_setting": "keep-value"}
+            original = {
+                "provider": [
+                    {"id": "deepseek_chat", "provider_source_id": "deepseek_source",
+                     "key": "private-value", "modalities": ["text", "image"]},
+                    {"id": "vision", "model": "keep-model", "modalities": ["text", "image"]},
+                ],
+                "other_setting": "keep-value",
+            }
             path.write_text(json.dumps(original), encoding="utf-8")
             configure_policy(root)
             value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["provider"][0]["modalities"], ["text", "image", "tool_use"])
             self.assertEqual(value["provider"][0]["companion_context"]["input_budget"], 16000)
             value["provider"][0]["companion_context"]["input_budget"] = 24000
             path.write_text(json.dumps(value), encoding="utf-8")
@@ -331,6 +337,10 @@ class PatchTests(unittest.TestCase):
             self.assertEqual(value, json.loads(path.read_text(encoding="utf-8")))
             self.assertEqual(value["provider"][1], original["provider"][1])
             self.assertEqual(value["provider"][0]["key"], "private-value")
+            value["provider"][0]["modalities"] = ["text"]
+            path.write_text(json.dumps(value), encoding="utf-8")
+            configure_policy(root)
+            self.assertEqual(value, json.loads(path.read_text(encoding="utf-8")))
 
     def test_patch_is_checked_idempotent_and_covers_both_request_modes(self):
         with tempfile.TemporaryDirectory() as folder:

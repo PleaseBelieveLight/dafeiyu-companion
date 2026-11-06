@@ -3,6 +3,8 @@
 from pathlib import Path
 import json
 
+CHAT_MODALITIES = ("text", "image", "tool_use")
+
 IMPORT = (
     "from astrbot.core.utils.chat_efficiency import (\n"
     "    metered_chat_completion, prepare_chat_payload,\n"
@@ -70,21 +72,29 @@ def apply_memory_recall_focus(target: Path) -> None:
 
 
 def configure_policy(target: Path) -> None:
-    """Deploy just the new provider policy, preserving all existing user configuration."""
+    """Upgrade the bundled chat provider while preserving custom settings."""
     path = target / "astrbot/data/cmd_config.json"
     if not path.exists():
         return
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     changed = False
     for provider in value.get("provider", []):
-        if provider.get("id") == "deepseek_chat" and "companion_context" not in provider:
+        if provider.get("id") != "deepseek_chat":
+            continue
+        if (
+            provider.get("provider_source_id") == "deepseek_source"
+            and provider.get("modalities") == ["text", "image"]
+        ):
+            provider["modalities"] = list(CHAT_MODALITIES)
+            changed = True
+        if "companion_context" not in provider:
             provider["companion_context"] = {
                 "enabled": True, "input_budget": 16000, "recent_rounds": 12,
                 "summary_max_tokens": 900, "summary_input_chars": 24000,
                 "route_simple_chat_tools": True,
             }
             changed = True
-        if provider.get("id") == "deepseek_chat" and isinstance(provider.get("companion_context"), dict):
+        if isinstance(provider.get("companion_context"), dict):
             if "summary_background" not in provider["companion_context"]:
                 provider["companion_context"]["summary_background"] = True
                 changed = True
