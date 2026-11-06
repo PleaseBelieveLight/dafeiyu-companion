@@ -218,6 +218,7 @@ def note_model(source, payload):
         data["context"].update(label for label, marker in (
             ("image", "<image_chat_turn>"), ("memory", "相关记忆"), ("schedule", "【本轮程序日程】"),
             ("research", "【自主生活本轮资料】"), ("followup", "【本轮相关记挂】"),
+            ("role_state", "【本轮角色状态】"),
             ("speech", "【本轮媒体状态】"), ("company", "【本轮陪聊】"),
         ) if marker in text)
         break

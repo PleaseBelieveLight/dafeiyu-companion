@@ -22,12 +22,15 @@ MUSIC = PLUGINS + "astrbot_plugin_music/main.py"
 POKE = PLUGINS + "astrbot_plugin_pokepro/main.py"
 OMNIDRAW = PLUGINS + "astrbot_plugin_omnidraw/main.py"
 VIDEO = PLUGINS + "astrbot_plugin_omnidraw/core/video_manager.py"
-STEALER = PLUGINS + "astrbot_plugin_stealer/main.py"
+STEALER = PLUGINS + "astrbot_plugin_stealer/"
+STEALER_MAIN = STEALER + "main.py"
+STEALER_EVENTS = STEALER + "core/events/event_handler.py"
 INTERACTION_PLUGINS = ("parser", "music", "pokepro", "omnidraw", "stealer")
 PLUGIN_CONFIGS = ("proactive_chat", "stealer", "life_continuity", "pokepro")
 CONFIG_PATHS = tuple(f"astrbot/data/config/astrbot_plugin_{name}_config.json" for name in PLUGIN_CONFIGS)
 EXPERIENCE_PATHS = (PROACTIVE_MAIN, PROACTIVE_START, PROACTIVE_FLOW, PIPELINE, RESPOND, QQ_EVENT,
-                    INTERNAL, AGENT_HOOKS, PARSER, MUSIC, POKE, OMNIDRAW, VIDEO, STEALER, *CONFIG_PATHS)
+                    INTERNAL, AGENT_HOOKS, PARSER, MUSIC, POKE, OMNIDRAW, VIDEO,
+                    STEALER_MAIN, STEALER_EVENTS, *CONFIG_PATHS)
 
 
 def configure_experience_plugin(name, values):
@@ -220,8 +223,19 @@ def apply_experience(target, *, reverse=False):
             ('await event.send(event.plain_result(f"❌ 后台视频渲染引擎发生错误：{safe_error}"))',
              'await send(event.plain_result(f"❌ 后台视频渲染引擎发生错误：{safe_error}"))'),
         )
-    if (target / STEALER).is_file():
-        patch(target, STEALER,
+    if (target / STEALER_MAIN).is_file():
+        legacy_capture = '        # Passive collection is retired; explicit commands still use the library.\n'
+        explicit_capture = (
+            '        if self.event_handler is not None:\n'
+            '            await self.event_handler.on_message(event, force_only=True)\n'
+            '        if not event.is_stopped():\n'
+            '            await capture_requested_meme(self, event)\n'
+        )
+        if legacy_capture in (target / STEALER_MAIN).read_text(encoding="utf-8-sig"):
+            patch_file(target, STEALER_MAIN, (legacy_capture, explicit_capture))
+        patch(target, STEALER_MAIN,
+            ('from .task_scheduler import TaskScheduler\n',
+             'from .capture_request import capture_requested_meme\nfrom .task_scheduler import TaskScheduler\n'),
             ('        event_handler = self._get_event_handler(\n'
              '            log_message="[Stealer] event_handler 未初始化，跳过消息处理",\n'
              '            log_level="debug",\n        )\n'
@@ -229,12 +243,28 @@ def apply_experience(target, *, reverse=False):
              '        try:\n            await event_handler.on_message(event)\n'
              '        except Exception as e:\n'
              '            logger.error(f"[Stealer] 处理消息时发生错误: {e}", exc_info=True)\n',
-             '        # Passive collection is retired; explicit commands still use the library.\n'),
+             explicit_capture),
             ('        """Apply the passive-emoji gates and schedule at most one task per turn."""\n',
              '        """Apply the passive-emoji gates and schedule at most one task per turn."""\n'
              '        if not getattr(self, "auto_send_meme", False):\n            return False\n'),
             ('        - 你看到当前消息里有适合作为表情包的图片时，也可以调用本工具补充素材库。\n',
              '        - 只有用户明确要求入库时才调用。\n'),
+        )
+        patch(target, STEALER_EVENTS,
+            ('    async def on_message(self, event: AstrMessageEvent):\n',
+             '    async def on_message(self, event: AstrMessageEvent, *, force_only: bool = False):\n'),
+            ('        force_active = force_entry is not None\n',
+             '        force_active = force_entry is not None\n'
+             '        if force_only and not force_active:\n            return\n'),
+            ('            await self._handle_force_capture(event, plugin_instance, imgs, store_urls)\n',
+             '            plugin_instance.consume_force_capture(event)\n'
+             '            event.stop_event()\n'
+             '            await self._handle_force_capture(event, plugin_instance, imgs, store_urls)\n'),
+            ('            await event.send(MessageChain([Plain(text=f"❌ 收录失败：{e}")]))\n'
+             '        finally:\n            try:\n                plugin_instance.consume_force_capture(event)\n'
+             '            except Exception:\n                pass\n\n    async def _clean_raw_directory',
+             '            await event.send(MessageChain([Plain(text=f"❌ 收录失败：{e}")]))\n'
+             '\n    async def _clean_raw_directory'),
         )
     if (target / PROACTIVE_MAIN).is_file():
         patch(target, PROACTIVE_MAIN,

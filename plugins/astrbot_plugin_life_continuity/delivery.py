@@ -12,7 +12,7 @@ class DeliveryGate:
         self.pending = set()
         self.lease = ProcessLease(ledger.store.folder, "delivery.lock")
 
-    async def send(self, scope, source, key, text, dispatch):
+    async def send(self, scope, source, key, text, dispatch, *, admit=None):
         self.policy()
         control = self.ledger.control(scope)
         if (control["paused"] or self.ledger.clock() - control["last_chat"]
@@ -21,8 +21,8 @@ class DeliveryGate:
         self.lease.acquire()
         task = None
         try:
-            ticket = self.ledger.reserve_delivery(scope, source, key, text, self.config)
-            if ticket["duplicate"]:
+            ticket = self.ledger.reserve_delivery(scope, source, key, text, self.config, admit=admit)
+            if ticket is None or ticket["duplicate"]:
                 self.lease.release()
                 return False
             task = asyncio.create_task(dispatch())

@@ -363,7 +363,7 @@ class ActivityLedger:
                 WHERE scope=? AND status='sending'""", (self.clock(), scope))
             return len(rows)
 
-    def reserve_delivery(self, scope, source, key, text, config):
+    def reserve_delivery(self, scope, source, key, text, config, *, admit=None):
         limits(config)
         now = self.clock()
         fingerprint = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
@@ -373,6 +373,8 @@ class ActivityLedger:
                 (scope, key, day_at(now)[0], fingerprint)).fetchone()
             if old:
                 return dict(_row(old), duplicate=True)
+            if admit is not None and not admit():
+                return None
             if self.snapshot(scope, config)["remaining_shares"] <= 0:
                 raise BudgetExceeded("当天主动分享额度已耗尽。")
             identity = uuid.uuid4().hex

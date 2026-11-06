@@ -218,6 +218,37 @@ class ChatPluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([tool.name for tool in request.func_tool.tools], ["other_tool"])
         self.assertEqual(len(shared.tools), 2)
 
+    async def test_role_state_reaches_only_the_owner_foreground_as_temporary_text(self):
+        await self.plugin.terminate()
+        self.plugin.config["followups_enabled"] = True
+        await self.plugin.initialize()
+
+        private = FakeEvent("我喜欢和你聊天", event_id="feedback")
+        await self.plugin.owner_message(private)
+        self.assertFalse(private.stopped)
+        private.send.assert_not_called()
+        self.assertEqual(self.plugin.affect.snapshot(SCOPE, "1001")["affinity"], 6)
+
+        request = self.request()
+        await self.plugin.inject_context(FakeEvent("今天想聊点轻松的"), request)
+        parts = request.extra_user_content_parts
+        role = next(part for part in parts if part["text"].startswith("【本轮角色状态】"))
+        self.assertTrue(role["_no_save"])
+        self.assertIn("比较熟悉", role["text"])
+        self.assertNotRegex(role["text"], r"\d")
+        self.assertNotIn("【本轮角色状态】", request.system_prompt)
+        status = await self.plugin.activity_command(private, {"action": "status"})
+        self.assertEqual(json.loads(status)["role_state"]["affinity"], 6)
+
+        for event in (FakeEvent("我不喜欢这种相处方式", sender="1002", event_id="guest"),
+                      FakeEvent("我不喜欢这种相处方式", event_id="scheduled")):
+            if event.sender == "1001":
+                event.set_extra("cron_job", True)
+            await self.plugin.owner_message(event)
+            await self.plugin.inject_context(event, request)
+            self.assertNotIn("【本轮角色状态】", str(request.extra_user_content_parts))
+        self.assertEqual(self.plugin.affect.snapshot(SCOPE, "1001")["affinity"], 6)
+
     async def test_wrong_sender_group_platform_and_disabled_switch_cannot_read_or_change(self):
         for mode in ("sender", "group", "platform", "disabled"):
             event = FakeEvent("暂停这个目标")

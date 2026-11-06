@@ -25,7 +25,7 @@
     "default": false
   },
   "followups_enabled": {
-    "description": "允许主人私聊显式记录和跟进记挂事项",
+    "description": "允许主人私聊记录和跟进记挂事项，并延续角色状态",
     "type": "bool",
     "default": false
   },

@@ -22,6 +22,7 @@ from .chat import (
 )
 from .activity import ActivityEngine
 from .activity_state import SHANGHAI
+from .affect import MARKER as AFFECT_MARKER, RoleAffect
 from .delivery import DeliveryGate, quiet_now
 from .followups import MARKER as FOLLOWUP_MARKER, Followups
 from .memory_bridge import MemoryBridge
@@ -42,6 +43,7 @@ class LifeContinuityPlugin(Star):
         self.engine = None
         self.delivery = None
         self.followups = None
+        self.affect = None
         self.trial = TrialControl(self)
         self.scheduler = DailyResearch(self)
 
@@ -60,6 +62,7 @@ class LifeContinuityPlugin(Star):
             )
             if self.config.get("followups_enabled") is True:
                 self.followups = Followups(self.store, self.engine.ledger.clock)
+                self.affect = RoleAffect(self.store, self.engine.ledger.clock)
                 try:
                     self.engine.recover(self.config["owner_scope"])
                 except StateError:
@@ -75,6 +78,7 @@ class LifeContinuityPlugin(Star):
                 self.store.close()
             self.store, self.chat, self.engine, self.delivery = None, None, None, None
             self.followups = None
+            self.affect = None
             logger.exception("[life_continuity] 存储初始化失败，自主生活保持不可用。")
 
     async def terminate(self):
@@ -106,6 +110,7 @@ class LifeContinuityPlugin(Star):
             self.engine = None
             self.delivery = None
             self.followups = None
+            self.affect = None
 
     def activity_policy(self):
         if (self.config.get("enabled") is not True
@@ -157,26 +162,40 @@ class LifeContinuityPlugin(Star):
 
         return await send_qq_with_receipt(self.context, scope, MessageChain().message(text))
 
-    async def send_contact(self, scope, reason, key, text):
+    async def send_contact(self, scope, reason, key, text, *, admit=None):
         async def dispatch():
             message_id = await self.dispatch_contact(scope, text)
             return {"transport_ack": bool(message_id), "message_id": message_id}
 
-        return await self.delivery.send(scope, reason, key, text, dispatch)
+        return await self.delivery.send(scope, reason, key, text, dispatch, admit=admit)
 
     async def followup_due(self):
         scope = self.config.get("owner_scope", "")
         if self.followups is None or not scope or self.followups.muted(scope):
             return False
-        row = self.followups.due(scope, scope.rsplit(":", 1)[-1])
+        actor = scope.rsplit(":", 1)[-1]
+        row = self.followups.due(scope, actor)
         if row is None:
             return False
+
+        def still_due():
+            current = self.followups.due(scope, actor)
+            return (current is not None and current["event_id"] == row["event_id"]
+                    and current["due"] == row["due"] and not self.followups.muted(scope))
+
         return await self.send_contact(scope, "followup", "followup:" + row["event_id"],
-                                       f"来问问约好的事，{row['item']}怎么样了？")
+                                       f"来问问约好的事，{row['item']}怎么样了？", admit=still_due)
+
+    def optional_contact(self, scope):
+        if self.followups is None:
+            return True
+        actor = scope.rsplit(":", 1)[-1]
+        return not self.followups.muted(scope) and not self.followups.reserved_today(scope, actor)
 
     async def guarded_proactive(self, scope, key, text, dispatch):
         try:
-            return await self.delivery.send(scope, "proactive_chat", key, text, dispatch)
+            return await self.delivery.send(scope, "proactive_chat", key, text, dispatch,
+                                            admit=lambda: self.optional_contact(scope))
         except Exception as exc:
             logger.warning("[life_continuity] 主动发送未确认：%s", type(exc).__name__)
             return False
@@ -184,10 +203,17 @@ class LifeContinuityPlugin(Star):
     async def share_note(self, event, job, goal, body):
         key = f"note:{goal['id']}:{goal['checkpoint']['note_version']}"
         text = f"{goal['title']} 有了一点进展。\n" + body[:500]
-        return await self.send_contact(event.unified_msg_origin, "life", key, text)
+        scope = event.unified_msg_origin
+        return await self.send_contact(scope, "life", key, text,
+                                       admit=lambda: self.optional_contact(scope))
 
     def allowed(self, event):
         return self.store is not None and is_owner_event(event, self.config)
+
+    def foreground(self, event):
+        return self.allowed(event) and not any(
+            event.get_extra(key) for key in ("fy_proactive", "cron_job", "background_task_result")
+        )
 
     def research_runtime(self):
         engine = self.engine
@@ -257,8 +283,7 @@ class LifeContinuityPlugin(Star):
             logger.warning("[life_continuity] 即时检索回复或历史未确认 (%s)", type(exc).__name__)
 
     async def inject_context(self, event: AstrMessageEvent, req):
-        foreground = (self.allowed(event) and not event.get_extra("fy_proactive")
-                      and not event.get_extra("cron_job"))
+        foreground = self.foreground(event)
         stopped = True
         if self.engine is not None and foreground:
             try:
@@ -303,6 +328,13 @@ class LifeContinuityPlugin(Star):
                     "说明能确定的条件和仍待确认的部分。后续承诺以实际安排为准。")
         set_temporary_context(req, "【本轮回答方式】", hint)
         related = foreground and research_question(text, req)
+        affect = ""
+        if self.affect and text and not related and query is None and preference != "verify":
+            try:
+                affect = self.affect.context(event.unified_msg_origin, str(event.get_sender_id()))
+            except Exception as exc:
+                logger.warning("[life_continuity] 角色状态暂不可读 (%s)", type(exc).__name__)
+        set_temporary_context(req, AFFECT_MARKER, affect)
         # Request-local copy: hiding our tools must not mutate the global set.
         if getattr(req, "func_tool", None) is not None:
             allow_search_tools = query is None and preference != "guess"
@@ -352,16 +384,22 @@ class LifeContinuityPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=90)
     async def owner_message(self, event: AstrMessageEvent):
-        if not self.allowed(event):
+        if not self.foreground(event):
             return
         text = plain_owner_text(event)
+        scope, actor = event.unified_msg_origin, str(event.get_sender_id())
+        identity = getattr(event.message_obj, "message_id", None)
+        if self.affect and text:
+            try:
+                self.affect.observe(scope, actor, identity, text)
+            except Exception as exc:
+                logger.warning("[life_continuity] 角色反馈未记录 (%s)", type(exc).__name__)
         try:
             answer = None
-            if self.followups and not event.get_extra("fy_proactive"):
-                self.engine.ledger.control_update(event.unified_msg_origin, chat=True)
+            if self.followups:
+                self.engine.ledger.control_update(scope, chat=True)
                 self.delivery.interrupt()
-                answer = self.followups.command(event.unified_msg_origin, str(event.get_sender_id()),
-                                                getattr(event.message_obj, "message_id", None), text)
+                answer = self.followups.command(scope, actor, identity, text)
             if answer is None:
                 command = parse_command(text)
                 if command is None:
@@ -413,8 +451,11 @@ class LifeContinuityPlugin(Star):
         identity = (str(message_id)
                     if message_id is not None and type(message_id) is not bool else "")
         if action == "status":
-            return json.dumps(self.engine.ledger.snapshot(scope, self.config)
-                              | {"research": self.research_runtime()}, ensure_ascii=False)
+            status = self.engine.ledger.snapshot(scope, self.config)
+            status["research"] = self.research_runtime()
+            if self.affect:
+                status["role_state"] = self.affect.snapshot(scope, str(event.get_sender_id()))
+            return json.dumps(status, ensure_ascii=False)
         if not identity:
             raise StateError("消息缺少真实标识。")
         if action == "new":
