@@ -22,6 +22,7 @@ from astrbot_plugin_life_continuity.activity_state import (
     ACTIVITY_SCHEMA, SHANGHAI, ActivityLedger, BudgetExceeded, day_at,
 )
 from astrbot_plugin_life_continuity.delivery import DeliveryGate, quiet_now
+from astrbot_plugin_life_continuity.followups import Followups
 from astrbot_plugin_life_continuity.native_agent import MeteredProvider
 from astrbot_plugin_life_continuity.state import (
     SCHEMA_VERSION, ConflictError, LifeStore, StateError, read_snapshot,
@@ -74,6 +75,43 @@ class LedgerFixture(unittest.TestCase):
     def finish(self, job, seconds=10):
         self.ledger.finish(job, "test", seconds)
         self.ledger.settle_time(job, seconds)
+
+
+class FollowupTests(LedgerFixture):
+    def test_cross_day_commitment_is_scoped_and_finishes_from_confirmed_owner_text(self):
+        followups = Followups(self.store, self.clock)
+        text = "明天9点问我 交材料"
+        answer = followups.command(SCOPE, "1001", "first", text)
+        self.assertIn("09:00", answer)
+        self.assertEqual(answer, followups.command(SCOPE, "1001", "first", text))
+        self.assertEqual(len(followups.rows(SCOPE, "1001")), 1)
+        self.assertEqual(followups.context(SCOPE, "1001", "今天有点累"), "")
+        self.assertEqual(followups.context(SCOPE, "1002", "交材料"), "")
+        self.assertEqual(followups.context("test:GroupMessage:1001", "1001", "交材料"), "")
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+
+        self.clock.now = datetime(2026, 10, 30, 9, tzinfo=SHANGHAI).timestamp()
+        self.assertEqual(followups.due(SCOPE, "1001")["item"], "交材料")
+        self.assertIn("翻篇", followups.command(SCOPE, "1001", "done", "已经交材料了"))
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+        self.assertIn("已结束", followups.context(SCOPE, "1001", "交材料"))
+        self.assertIn("没有", followups.command(SCOPE, "1001", "list", "记挂事项"))
+
+    def test_restart_preserves_uncertain_followup_and_quiet_preference(self):
+        followups = Followups(self.store, self.clock)
+        followups.command(SCOPE, "1001", "pending", "明天9点问我 交表单")
+        followups.command(SCOPE, "1001", "quiet", "先别主动找我")
+        self.clock.now = datetime(2026, 10, 30, 9, tzinfo=SHANGHAI).timestamp()
+        self.ledger.reserve_delivery(SCOPE, "followup", "followup:pending", "交表单怎么样", self.cfg)
+        self.ledger.recover(SCOPE)
+        with closing(LifeStore(self.folder)) as reopened:
+            restored = Followups(reopened, self.clock)
+            self.assertTrue(restored.muted(SCOPE))
+            self.assertIsNone(restored.due(SCOPE, "1001"))
+            self.assertIn("待核实", restored.context(SCOPE, "1001", "交表单"))
+            restored.command(SCOPE, "1001", "unmute", "可以主动找我了")
+            self.assertFalse(restored.muted(SCOPE))
+            self.assertIsNone(restored.due(SCOPE, "1001"))
 
 
 class BudgetTests(LedgerFixture):
@@ -598,7 +636,7 @@ class ActivityPluginTests(unittest.IsolatedAsyncioTestCase):
             try:
                 plugin.delivery.policy = lambda: None
                 event = FakeEvent()
-                event.send.return_value = False
+                plugin.dispatch_contact = AsyncMock(return_value=None)
                 goal = {"id": "test-goal", "title": "主题", "checkpoint": {"note_version": 1}}
                 self.assertFalse(await plugin.share_note(event, {}, goal, "笔记"))
                 row = read_snapshot(Path(folder), scope=SCOPE)["life_deliveries"][0]

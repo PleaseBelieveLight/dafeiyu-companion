@@ -35,6 +35,7 @@ SUMMARY_RULES = (
     '只返回JSON对象：{"summary":"精炼但保留必要细节的中文摘要"}。'
 )
 _LOCKS: dict[str, asyncio.Lock] = {}
+_REFRESHES: dict[str, asyncio.Task] = {}
 logger = logging.getLogger("astrbot")
 
 
@@ -154,6 +155,10 @@ def write_usage(provider, payload, started, source, status, usage=None, error=""
 async def metered_chat_completion(provider, create, *, usage_path=None, source_label=None, **payload):
     """Record each SDK attempt, including streaming usage and uncertain failures."""
     started, source = time.time(), source_label or call_source()
+    if __package__:
+        from .conversation_turn import note_model
+
+        note_model(source, payload)
     try:
         result = await create(**payload)
     except BaseException as exc:
@@ -269,7 +274,7 @@ def without_internal_cron_history(messages):
     return kept if len(kept) != len(messages) else messages
 
 
-async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None, path=None):
+async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None, path=None, background_worker=False):
     """Compact only a copied wire payload, at most one incremental summary per call."""
     settings = getattr(provider, "provider_config", {}).get("companion_context", {})
     if SOURCE.get() == "context_summary":
@@ -323,6 +328,17 @@ async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None
             done, summary = 0, ""
             if row and 0 < row[0] <= cutoff and row[1] == _hash(_json(old[:row[0]])):
                 done, summary = row[0], row[2]
+            if done < cutoff and cfg.get("summary_background") is True and not background_worker:
+                if scope not in _REFRESHES:
+                    task = asyncio.create_task(prepare_chat_payload(
+                        provider, copy.deepcopy(payload), tools, conversation_id=conversation_id,
+                        path=path, background_worker=True,
+                    ))
+                    _REFRESHES[scope] = task
+                    task.add_done_callback(lambda _: _REFRESHES.pop(scope, None))
+                if not done:
+                    return payload, tools
+                cutoff = done  # Keep the valid summary and every unsummarized round.
             if done < cutoff:
                 end = done
                 char_budget = max(2000, int(cfg["summary_input_chars"]))
@@ -365,12 +381,13 @@ async def prepare_chat_payload(provider, payload, tools, *, conversation_id=None
                 p.get("type") == "image_url" for p in m["content"]
             ) for m in recent)
             if not has_image and re.search(r"那[张个幅].{0,4}(?:图|照片)|上次.{0,8}(?:图|照片)|图里|图中", question):
-                for group in reversed(rounds[:cutoff]):
-                    image_message = next((m for m in group if isinstance(m.get("content"), list)
-                                          and any(p.get("type") == "image_url" for p in m["content"])), None)
-                    if image_message:
-                        recent = [image_message, *recent]
-                        break
+                images = [m for group in rounds[:cutoff] for m in group
+                          if m.get("role") == "user" and isinstance(m.get("content"), list)
+                          and any(p.get("type") == "image_url" for p in m["content"])]
+                if len(images) == 1 and sum(p.get("type") == "image_url" for p in images[0]["content"]) == 1:
+                    recent = [images[0], *recent]
+                elif images:
+                    leading = [*leading, {"role": "system", "content": "有多张历史图片可指代，请先确认是哪一张。"}]
             outgoing = dict(payload, messages=[*leading, note, *recent])
             return outgoing, tools
     except asyncio.CancelledError:

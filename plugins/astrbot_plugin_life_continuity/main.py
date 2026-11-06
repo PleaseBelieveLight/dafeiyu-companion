@@ -23,6 +23,7 @@ from .chat import (
 from .activity import ActivityEngine
 from .activity_state import SHANGHAI
 from .delivery import DeliveryGate, quiet_now
+from .followups import MARKER as FOLLOWUP_MARKER, Followups
 from .memory_bridge import MemoryBridge
 from .scheduler import DailyResearch
 from .search import SearchError, deliver_search_reply, foreground_search
@@ -40,6 +41,7 @@ class LifeContinuityPlugin(Star):
         self._memory = None
         self.engine = None
         self.delivery = None
+        self.followups = None
         self.trial = TrialControl(self)
         self.scheduler = DailyResearch(self)
 
@@ -56,7 +58,13 @@ class LifeContinuityPlugin(Star):
             self.engine = ActivityEngine(
                 self.store, self.context, self.config, self.activity_policy, share=self.share_note,
             )
-            self.delivery = DeliveryGate(self.engine.ledger, self.config, self.activity_policy)
+            if self.config.get("followups_enabled") is True:
+                self.followups = Followups(self.store, self.engine.ledger.clock)
+                try:
+                    self.engine.recover(self.config["owner_scope"])
+                except StateError:
+                    logger.warning("[life_continuity] 旧发送仍在核对，保留原回执。")
+            self.delivery = DeliveryGate(self.engine.ledger, self.config, self.contact_policy)
             self.scheduler.start()
             logger.info("[life_continuity] 存储已就绪；每日推进开关：%s；联网检索开关：%s。",
                         self.config.get("auto_enabled") is True,
@@ -66,6 +74,7 @@ class LifeContinuityPlugin(Star):
             if self.store is not None:
                 self.store.close()
             self.store, self.chat, self.engine, self.delivery = None, None, None, None
+            self.followups = None
             logger.exception("[life_continuity] 存储初始化失败，自主生活保持不可用。")
 
     async def terminate(self):
@@ -96,11 +105,15 @@ class LifeContinuityPlugin(Star):
             self._memory = None
             self.engine = None
             self.delivery = None
+            self.followups = None
 
     def activity_policy(self):
         if (self.config.get("enabled") is not True
                 or self.config.get("activity_enabled") is not True):
             raise StateError("单次活动开关尚未开启。")
+        self.contact_window()
+
+    def contact_window(self):
         if self.delivery is not None and self.delivery.pending:
             raise StateError("上一条主动消息的在途调用尚未结束。")
         metadata = self.context.get_registered_star("astrbot_plugin_proactive_chat")
@@ -118,11 +131,48 @@ class LifeContinuityPlugin(Star):
         specification = cfg.get("schedule_settings", {}).get("quiet_hours")
         if quiet_now(specification, datetime.now(SHANGHAI)):
             raise StateError("当前处于现有免打扰时段。")
+        return cfg.get("schedule_settings", {})
 
     def wants_proactive_gate(self, scope):
         return (self.store is not None and self.config.get("enabled") is True
                 and self.config.get("activity_enabled") is True
                 and scope == self.config.get("owner_scope"))
+
+    def contact_policy(self):
+        settings = self.contact_window()
+        scope = self.config["owner_scope"]
+        if self.followups and self.followups.muted(scope):
+            raise StateError("主人暂时关闭主动联系。")
+        cap = settings.get("max_unanswered_times", 2)
+        if type(cap) is int and cap > 0:
+            last_chat = self.engine.ledger.control(scope)["last_chat"]
+            count = self.store.db.execute("""SELECT count(*) FROM life_deliveries
+                WHERE scope=? AND created>?""", (scope, last_chat)).fetchone()[0]
+            if count >= cap:
+                raise StateError("主动联系已达到等候回复上限。")
+
+    async def dispatch_contact(self, scope, text):
+        from astrbot.core.message.message_event_result import MessageChain
+        from astrbot.core.utils.task_receipts import send_qq_with_receipt
+
+        return await send_qq_with_receipt(self.context, scope, MessageChain().message(text))
+
+    async def send_contact(self, scope, reason, key, text):
+        async def dispatch():
+            message_id = await self.dispatch_contact(scope, text)
+            return {"transport_ack": bool(message_id), "message_id": message_id}
+
+        return await self.delivery.send(scope, reason, key, text, dispatch)
+
+    async def followup_due(self):
+        scope = self.config.get("owner_scope", "")
+        if self.followups is None or not scope or self.followups.muted(scope):
+            return False
+        row = self.followups.due(scope, scope.rsplit(":", 1)[-1])
+        if row is None:
+            return False
+        return await self.send_contact(scope, "followup", "followup:" + row["event_id"],
+                                       f"来问问约好的事，{row['item']}怎么样了？")
 
     async def guarded_proactive(self, scope, key, text, dispatch):
         try:
@@ -133,13 +183,8 @@ class LifeContinuityPlugin(Star):
 
     async def share_note(self, event, job, goal, body):
         key = f"note:{goal['id']}:{goal['checkpoint']['note_version']}"
-        text = f"{goal['title']} 有了一点进展：\n" + body[:500]
-
-        async def dispatch():
-            result = await event.send(event.plain_result(text))
-            return {"transport_ack": result is not False}
-
-        return await self.delivery.send(event.unified_msg_origin, "life", key, text, dispatch)
+        text = f"{goal['title']} 有了一点进展。\n" + body[:500]
+        return await self.send_contact(event.unified_msg_origin, "life", key, text)
 
     def allowed(self, event):
         return self.store is not None and is_owner_event(event, self.config)
@@ -182,13 +227,19 @@ class LifeContinuityPlugin(Star):
         # An LLM fallback would be another delivery attempt and could
         # misrepresent a failed or uncertain lookup.
         event.stop_event()
+        from astrbot.core.utils.conversation_turn import note_delivery, note_result
         from astrbot.core.utils.task_receipts import send_qq_with_receipt
 
         scope, text = event.unified_msg_origin, plain_owner_text(event)
+        note_result(receipt["status"])
 
         async def dispatch(answer):
-            return await send_qq_with_receipt(self.context, scope, event.plain_result(answer),
-                                              self_id=event.get_self_id())
+            from time import monotonic
+
+            chain, started = event.plain_result(answer), monotonic()
+            identity = await send_qq_with_receipt(self.context, scope, chain, self_id=event.get_self_id())
+            note_delivery(chain, monotonic() - started)
+            return identity
 
         try:
             answer = await deliver_search_reply(self.store, event, text, receipt, dispatch)
@@ -226,6 +277,13 @@ class LifeContinuityPlugin(Star):
         set_temporary_context(req, "【自主生活本轮资料】", "")
         set_temporary_context(req, "【本轮即时检索回执】", "")
         text = plain_owner_text(event) if foreground else ""
+        followup = ""
+        if self.followups and text:
+            try:
+                followup = self.followups.context(event.unified_msg_origin, str(event.get_sender_id()), text)
+            except Exception as exc:
+                logger.warning("[life_continuity] 记挂资料暂不可读 (%s)", type(exc).__name__)
+        set_temporary_context(req, FOLLOWUP_MARKER, followup)
         preference = chat_turn_preference(text)
         query = None
         if text:
@@ -298,10 +356,17 @@ class LifeContinuityPlugin(Star):
             return
         text = plain_owner_text(event)
         try:
-            command = parse_command(text)
-            if command is None:
-                return
-            answer = await self.command_reply(event, text, command)
+            answer = None
+            if self.followups and not event.get_extra("fy_proactive"):
+                self.engine.ledger.control_update(event.unified_msg_origin, chat=True)
+                self.delivery.interrupt()
+                answer = self.followups.command(event.unified_msg_origin, str(event.get_sender_id()),
+                                                getattr(event.message_obj, "message_id", None), text)
+            if answer is None:
+                command = parse_command(text)
+                if command is None:
+                    return
+                answer = await self.command_reply(event, text, command)
         except Exception as exc:
             logger.warning("[life_continuity] 主人请求未完成：%s", type(exc).__name__)
             detail = str(exc)

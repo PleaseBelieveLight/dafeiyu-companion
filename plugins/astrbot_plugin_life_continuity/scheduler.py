@@ -12,7 +12,7 @@ class DailyResearch:
         self.plugin, self.task, self.last_issue = plugin, None, ""
 
     def start(self):
-        if self.plugin.config.get("auto_enabled") is True and self.task is None:
+        if any(self.plugin.config.get(key) is True for key in ("auto_enabled", "followups_enabled")) and self.task is None:
             self.task = asyncio.create_task(self._loop())
 
     async def close(self):
@@ -25,6 +25,9 @@ class DailyResearch:
         while True:
             try:
                 self.tick()
+                await self.plugin.followup_due()
+            except StateError:
+                pass
             except Exception as exc:
                 self.last_issue = type(exc).__name__
             await asyncio.sleep(60)

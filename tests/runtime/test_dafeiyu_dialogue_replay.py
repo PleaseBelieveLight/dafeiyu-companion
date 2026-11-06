@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import NamedTuple
 from unittest.mock import AsyncMock, patch
 
+from openai import AsyncOpenAI
 from openai.types.chat.chat_completion import ChatCompletion
 
 from astrbot.core.agent.message import ImageURLPart, TextPart, bind_checkpoint_messages, dump_messages_with_checkpoints
@@ -33,6 +34,8 @@ injection_module = importlib.import_module("data.plugins.astrbot_plugin_livingme
 
 REPLAY_MODEL = "fixed-dialogue-model"
 REPLAY_PERSONA = "你是大肥鱼。根据对方当下的话和可核对的回执回应。"
+REPLAY_EXPERIENCE = True
+REVIEW_CONFIG = None
 REPLAY_RECORDS = []
 OWNER, OTHER = "1001", "1002"
 PRIVATE = f"test:FriendMessage:{OWNER}"
@@ -116,6 +119,11 @@ class ReplayClock(datetime):
 
 class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.review = None
+        if REVIEW_CONFIG:
+            self.review = AsyncOpenAI(api_key=REVIEW_CONFIG["api_key"], base_url=REVIEW_CONFIG["base_url"],
+                                      max_retries=0, timeout=45)
+            self.addAsyncCleanup(self.review.close)
         temp = TemporaryDirectory(prefix="dafeiyu-dialogue-")
         self.addCleanup(temp.cleanup)
         folder = Path(temp.name)
@@ -199,9 +207,16 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
             for name in ("life_recall", "recall_long_term_memory", "web_search_anysearch")
         ]))
         if signal == "image":
-            req.extra_user_content_parts.append(ImageURLPart(image_url={"url": IMAGE}))
+            if self.review:
+                req.extra_user_content_parts.append(TextPart(text="<image_caption>合成样本：一张猫咪瞪圆眼睛的表情包。</image_caption>"))
+            else:
+                req.extra_user_content_parts.append(ImageURLPart(image_url={"url": IMAGE}))
         if signal == "caption":
             req.extra_user_content_parts.append(TextPart(text="<image_caption>表情包里的虚构台词。</image_caption>"))
+        if REPLAY_EXPERIENCE:
+            from astrbot.core.utils.conversation_turn import route_capabilities
+
+            route_capabilities(event, req)
         self.memory_lookup.reset_mock()
         await self.memory.handle_memory_recall(event, req)
         with patch.object(face_module.sp, "get_async", new=AsyncMock(return_value=session)):
@@ -213,11 +228,15 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
         await self.life.inject_context(event, req)
         user = await req.assemble_context()
         response, wire = await self.complete(req, user, raw, case.name)
-        self.assertEqual(response.completion_text, raw)
+        if self.review:
+            raw = response.completion_text or ""
+        else:
+            self.assertEqual(response.completion_text, raw)
         await face.scrub_drafts(event, response)
-        result.chain = list(response.result_chain.chain)
+        result.chain = list(response.result_chain.chain) if response.result_chain else [Plain(response.completion_text or "")]
         sent = await self.deliver(face, event, pipeline, session)
-        self.assertEqual(sent, [{"type": "voice" if signal == "voice" else "text", "text": reply}])
+        if not self.review:
+            self.assertEqual(sent, [{"type": "voice" if signal == "voice" else "text", "text": reply}])
 
         history.extend(dump_messages_with_checkpoints(bind_checkpoint_messages([user])))
         history.append({"role": "assistant", "content": response.completion_text})
@@ -246,6 +265,7 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
             "tools": [item["function"]["name"] for item in wire.get("tools", [])],
             "lookup_calls": lookup.await_count, "memory_calls": self.memory_lookup.await_count,
             "receipt_status": receipt_status,
+            "generation_calls": 1,
             "schedule_items": [line[2:] for line in blocks.get("schedule", "").splitlines() if line.startswith("- ")],
             "model_reply": raw, "sent": sent,
         }
@@ -261,6 +281,14 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
             id="dialogue-test", object="chat.completion", created=0, model=REPLAY_MODEL,
             choices=[{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
         ))
+        if self.review:
+            async def live_completion(**payload):
+                payload.pop("tools", None)
+                payload.pop("tool_choice", None)
+                return await self.review.chat.completions.create(
+                    **payload, temperature=0.0, max_tokens=500, extra_body=REVIEW_CONFIG["extra_body"],
+                )
+            sdk.side_effect = live_completion
         provider = ProviderOpenAIOfficial.__new__(ProviderOpenAIOfficial)
         provider.provider_config = {"id": "dialogue-test", "companion_context": {"enabled": True}}
         provider.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=sdk)))
@@ -273,8 +301,7 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sdk.await_args.kwargs["model"], REPLAY_MODEL)
         return response, sdk.await_args.kwargs
 
-    @staticmethod
-    async def deliver(face, event, pipeline, session):
+    async def deliver(self, face, event, pipeline, session):
         handler = SimpleNamespace(handler=face.convert_faces, handler_module_path="test.dialogue", handler_name="faces")
         decorator, responder = ResultDecorateStage(), RespondStage()
         await decorator.initialize(pipeline)
@@ -290,7 +317,8 @@ class DialogueReplayTests(unittest.IsolatedAsyncioTestCase):
             async for _ in decorator.process(event):
                 pass
             await responder.process(event)
-        event.send.assert_awaited_once()
+        if not self.review:
+            event.send.assert_awaited_once()
         return [
             {"type": "voice" if isinstance(part, Record) else "text", "text": part.text}
             for call in event.send.await_args_list for part in call.args[0].chain if isinstance(part, (Plain, Record))

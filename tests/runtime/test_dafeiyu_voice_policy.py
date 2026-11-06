@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from astrbot.core.message.components import Plain, Record
-from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture
+from tests.test_dafeiyu_voice_mode import envelope, face_module, fixture, temporary_text
 
 
 class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -66,7 +66,7 @@ class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
         ):
             await plugin.inject_voice_status(event, request)
             self.assertEqual(extras["_fy_voice_mode"], "normal")
-            self.assertIn('"voice_requested":true', request.system_prompt)
+            self.assertIn('"voice_requested":true', temporary_text(request))
             await plugin.scrub_drafts(event, response)
             self.assertEqual(response.completion_text, text)
             self.assertTrue(extras["_fy_voice_plan"]["voice_requested"])
@@ -160,7 +160,7 @@ class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([comp.text for comp in result.chain if isinstance(comp, Record)], [text])
         provider.get_audio.assert_awaited_once_with(text)
 
-    async def test_no_rephrased_summary_rule_is_injected_with_voice_on_or_off(self):
+    async def test_plain_turn_does_not_repeat_voice_protocol_in_system_prompt(self):
         for enabled in (True, False):
             plugin, event, _, _, _, _ = fixture("", {"tts_enabled": enabled})
             request = SimpleNamespace(system_prompt="Existing persona.")
@@ -169,7 +169,8 @@ class SparseVoicePolicyTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await plugin.inject_voice_status(event, request)
                 await plugin.inject_voice_status(event, request)
-            self.assertEqual(request.system_prompt.count("同一条回复中，一个意思只说一次"), 1)
+            self.assertEqual(request.system_prompt.count("【当前会话语音状态】"), 1)
+            self.assertNotIn("<fy_reply>", request.system_prompt + temporary_text(request))
 
     async def test_quiet_context_uses_compact_text_policy_and_suppresses_speech(self):
         values = fixture(envelope("", "我听着呢。"), {"tts_enabled": True})

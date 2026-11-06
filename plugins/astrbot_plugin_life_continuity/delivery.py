@@ -30,13 +30,15 @@ class DeliveryGate:
         except BaseException:
             self.lease.release()
             raise
-        receipt, confirmed = {}, False
+        receipt, confirmed = {"transport_ack": False}, False
         try:
             done, _ = await asyncio.wait(
                 {task}, timeout=limits(self.config)["stop_timeout_seconds"]
             )
             if not done:
                 task.cancel()
+                return False
+            if task.cancelled():
                 return False
             result = task.result()
             confirmed = result is True or (isinstance(result, dict)
@@ -71,6 +73,10 @@ class DeliveryGate:
             )
             return not pending
         return True
+
+    def interrupt(self):
+        for task in tuple(self.pending):
+            task.cancel()
 
 
 def quiet_now(specification, now):

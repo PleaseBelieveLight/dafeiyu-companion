@@ -106,6 +106,30 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         self.provider.text_chat.assert_awaited_once()
         self.assertLess(policy.estimate_input(result), policy.estimate_input(payload))
 
+    async def test_background_summary_leaves_first_reply_unblocked_and_reuses_valid_result(self):
+        self.provider.provider_config["companion_context"]["summary_background"] = True
+        entered, release = asyncio.Event(), asyncio.Event()
+        result = self.provider.text_chat.return_value
+
+        async def summary(**kwargs):
+            entered.set()
+            await release.wait()
+            return result
+
+        self.provider.text_chat.side_effect = summary
+        payload = self.payload()
+        result_before, _ = await self.prepare(payload)
+        self.assertIs(result_before, payload)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        result_while_busy, _ = await self.prepare(payload)
+        self.assertIs(result_while_busy, payload)
+        task = next(iter(policy._REFRESHES.values()))
+        release.set()
+        await task
+        result_after, _ = await self.prepare(payload)
+        self.assertLess(len(result_after["messages"]), len(payload["messages"]))
+        self.provider.text_chat.assert_awaited_once()
+
     async def test_summary_output_cap_is_present_in_actual_wire_payload(self):
         token = policy.SOURCE.set("context_summary")
         cap = policy.SUMMARY_MAX_TOKENS.set(600)

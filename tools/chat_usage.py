@@ -2,9 +2,11 @@
 
 import argparse
 import json
+import math
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from statistics import median
 
 from workspace import RUNTIME_ROOT
 
@@ -22,7 +24,21 @@ def report(path: Path, days: int = 7):
             SUM(input_cached) AS known_cached, SUM(output) AS known_output
             FROM calls WHERE started>=strftime('%s','now')-?*86400
             GROUP BY source,provider,model ORDER BY attempts DESC""", (days,)).fetchall()
-    return {"ready": True, "days": days, "groups": [dict(row) for row in rows],
+        measured = {}
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_turns'").fetchone():
+            turns = con.execute("""SELECT kind,generation_calls,first_reply,media,transport
+                FROM chat_turns WHERE at>=strftime('%s','now')-?*86400""", (days,)).fetchall()
+            for kind in sorted({row["kind"] for row in turns}):
+                group = [row for row in turns if row["kind"] == kind]
+                sent = [row for row in group if row["first_reply"] is not None]
+                times = sorted(row["first_reply"] for row in sent)
+                measured[kind] = {"turns": len(group), "first_replies": len(sent),
+                    "single_generation": sum(row["generation_calls"] == 1 for row in sent),
+                    "first_reply_p50_ms": round(1000 * median(times)) if times else None,
+                    "first_reply_p95_ms": round(1000 * times[math.ceil(len(times) * .95) - 1]) if times else None,
+                    "media_p50_ms": round(1000 * median(row["media"] for row in group)),
+                    "transport_p50_ms": round(1000 * median(row["transport"] for row in sent)) if sent else None}
+    return {"ready": True, "days": days, "groups": [dict(row) for row in rows], "qq_turns": measured,
             "coverage": "AstrBot OpenAI兼容聊天适配器及浏览器内层的SDK尝试；TTS和生图不在此表。"}
 
 

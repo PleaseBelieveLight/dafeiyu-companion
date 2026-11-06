@@ -29,6 +29,7 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
                 settings=(image_ready, video_ready, plugin_active, video_active)
             ):
                 plugin, event, _, _, _, _ = fixture("", {"tts_enabled": True})
+                event.get_message_str.return_value = "给我跳个舞"
                 node = SimpleNamespace(
                     base_url="https://example.invalid", model="test", has_api_key=True
                 )
@@ -62,10 +63,9 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
                     system_prompt="Existing persona.",
                     func_tool=ToolSet(registry_tools.copy()),
                 )
-                with patch.object(
-                    face_module.sp,
-                    "get_async",
-                    new=AsyncMock(return_value={"tts_enabled": True}),
+                with (
+                    patch.object(face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": True})),
+                    patch.object(plugin, "send_requested_action_picture", new=AsyncMock(return_value="")),
                 ):
                     await plugin.inject_voice_status(event, request)
                     await plugin.inject_voice_status(event, request)
@@ -74,9 +74,19 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(len(registry_tools), 4)
                 self.assertEqual(temporary_text(request).count("本轮可用媒体工具："), 1)
-                self.assertIn("generate_selfie，action", request.system_prompt)
-                self.assertIn("哒哒哒", request.system_prompt)
+                self.assertNotIn("generate_selfie，action", request.system_prompt)
+                self.assertEqual("generate_selfie，action" in temporary_text(request), bool(expected))
                 self.assertIn("本轮状态：普通聊天自动语音已允许", temporary_text(request))
+
+    async def test_plain_turn_leaves_unneeded_media_protocol_and_tools_out(self):
+        plugin, event, _, _, _, _ = fixture("", {"tts_enabled": True})
+        request = SimpleNamespace(system_prompt="Existing persona.", func_tool=ToolSet([
+            FunctionTool(name="generate_selfie", description="", parameters={}),
+        ]))
+        with patch.object(face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": True})):
+            await plugin.inject_voice_status(event, request)
+        self.assertEqual(request.func_tool.names(), [])
+        self.assertNotIn("<fy_reply>", temporary_text(request))
 
     async def test_hook_does_not_grant_missing_tools_or_voice_permission(self):
         plugin, event, _, _, _, _ = fixture("", {"tts_enabled": False})

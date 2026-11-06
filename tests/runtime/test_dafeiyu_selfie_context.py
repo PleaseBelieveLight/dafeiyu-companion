@@ -215,6 +215,7 @@ class SelfieContextTests(unittest.IsolatedAsyncioTestCase):
             "conversation-a",
         )
         new_face, new_event, _, _, _, _ = fixture("", {})
+        new_event.get_message_str.return_value = "你刚发的自拍穿了什么？"
         new_face.context.conversation_manager = self.manager
         for cid, included in [("conversation-a", True), ("conversation-b", False)]:
             with self.subTest(conversation=cid):

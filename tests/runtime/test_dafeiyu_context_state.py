@@ -1,5 +1,6 @@
 """Dynamic program state is scoped, temporary and leaves the cache prefix stable."""
 
+import asyncio
 import importlib
 import json
 import unittest
@@ -18,9 +19,10 @@ from astrbot.core.conversation_mgr import ConversationManager
 from astrbot.core.cron.events import CronMessageEvent
 from astrbot.core.cron.manager import CronJobManager, CronJobSchedulingError
 from astrbot.core.db.po import CronJob
-from astrbot.core.message.components import At, AtAll, Plain, Reply
+from astrbot.core.message.components import At, AtAll, Image, Plain, Reply
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.pipeline.waking_check import stage as waking
+from astrbot.core.pipeline.respond.stage import RespondStage
 from astrbot.core.pipeline.whitelist_check.stage import WhitelistCheckStage
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
@@ -31,7 +33,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import A
 from astrbot.core.provider.entities import LLMResponse, ProviderRequest
 from astrbot.core.tools.cron_tools import FutureTaskTool
 from astrbot.core.tools.message_tools import SendMessageToUserTool
-from astrbot.core.utils import chat_efficiency, chat_scope, task_receipts
+from astrbot.core.utils import chat_efficiency, chat_scope, conversation_turn, task_receipts
 from astrbot.core.utils.history_saver import persist_agent_history
 from tests.test_dafeiyu_voice_mode import face_module, fixture, temporary_text
 
@@ -195,6 +197,84 @@ class ContextStateTests(unittest.IsolatedAsyncioTestCase):
         db.update_conversation.assert_not_awaited()
         db.delete_conversation.assert_not_awaited()
         self.assertNotIn(group, manager.session_conversations)
+
+    async def test_short_image_burst_joins_once_and_correction_cancels_older_reply_tail(self):
+        fragment = self.group_event("1", "fragment", [Plain("给你看")])
+        photo = self.group_event("1", "photo", [Image.fromURL("https://example.invalid/image")])
+        other = self.group_event("2", "another", [Plain("另一个人在说话")])
+        correction = self.group_event("1", "correction", [Plain("不是，先别发图片")])
+        for event in (fragment, photo, other, correction):
+            event.session_id = f"{event.get_sender_id()}_20"
+        waiting = asyncio.create_task(conversation_turn.begin_turn(fragment))
+        await asyncio.sleep(0)
+        self.assertTrue(await conversation_turn.begin_turn(other))
+        self.assertTrue(await conversation_turn.begin_turn(photo))
+        self.assertFalse(await waiting)
+        self.assertEqual(photo.message_str, "给你看")
+        self.assertEqual([type(part) for part in photo.get_messages()], [Plain, Image])
+        self.assertTrue(conversation_turn.current_turn(photo))
+        await conversation_turn.begin_turn(correction)
+        self.assertFalse(conversation_turn.current_turn(photo), (photo.get_extra(), correction.get_extra()))
+        _, _, response, _, _, _ = fixture("未发送的旧尾巴")
+        self.assertFalse(RespondStage._keep_turn(photo, response))
+        self.assertTrue(photo.get_extra("_fy_suppressed_reply"))
+        self.assertTrue(conversation_turn.current_turn(other))
+        stopped = self.group_event("1", "cancel", [Plain("取消点歌")])
+        stopped.session_id = "1_20"
+        await conversation_turn.begin_turn(stopped)
+        self.assertFalse(conversation_turn.can_finish_media(photo))
+
+    async def test_idle_proactive_paths_exit_before_touching_provider_or_history(self):
+        module = importlib.import_module("data.plugins.astrbot_plugin_proactive_chat.core.pipeline.flow_orchestrator")
+        flow = module.FlowOrchestrator(SimpleNamespace())
+        for source in (module.TriggerSource.SCHEDULE, module.TriggerSource.AUTO_TRIGGER, module.TriggerSource.GROUP_IDLE):
+            await flow.run("test", source)
+
+    async def test_video_already_rendering_does_not_send_after_explicit_cancel(self):
+        module = importlib.import_module("data.plugins.astrbot_plugin_omnidraw.core.video_manager")
+        video = module.VideoManager.__new__(module.VideoManager)
+        event = self.group_event("1", "video", [Plain("给我做个视频")])
+        cancel = self.group_event("1", "stop-video", [Plain("取消视频")])
+        event.session_id = cancel.session_id = "1_20"
+        event.send = AsyncMock()
+        video._get_video_provider_chain = lambda: [SimpleNamespace(id="test")]
+        video._apply_provider_defaults = lambda *_: {}
+        video._effective_request_model = lambda *_: "test"
+        video._build_success_text = lambda *_, **__: "渲染完成"
+
+        async def render(*args):
+            await conversation_turn.begin_turn(cancel)
+            return "https://example.invalid/video.mp4"
+
+        video._fetch_video_from_api = AsyncMock(side_effect=render)
+        await conversation_turn.begin_turn(event)
+        await video.background_task_runner(event, "测试视频")
+        video._fetch_video_from_api.assert_awaited_once()
+        event.send.assert_not_awaited()
+
+    async def test_turn_routes_explicit_tasks_and_only_records_anonymous_delivery_measurements(self):
+        event = self.group_event("1", "raw-event-9001", [Plain("你好")])
+        names = ("browser_task", "get_screenshot", "recall_long_term_memory", "web_search_anysearch", "future_task")
+        tools = ToolSet([FunctionTool(name=name, description=name, parameters={}) for name in names])
+        request = ProviderRequest(func_tool=tools)
+        conversation_turn.route_capabilities(event, request)
+        self.assertEqual(request.func_tool.names(), [])
+        event.message_str = "打开浏览器看看网页"
+        request.func_tool = tools
+        conversation_turn.route_capabilities(event, request)
+        self.assertIn("browser_task", request.func_tool.names())
+        self.assertNotIn("recall_long_term_memory", request.func_tool.names())
+        token = conversation_turn.start_metrics(event)
+        conversation_turn.activate_metrics(event)
+        conversation_turn.note_model("chat", {"messages": [{"role": "user", "content": "私密正文"}]})
+        conversation_turn.note_delivery(MessageChain().message("私密正文"), 0.04)
+        conversation_turn.finish_metrics(event, token)
+        with closing(chat_efficiency.connect()) as db:
+            row = db.execute("SELECT event,generation_calls,first_reply,channels FROM chat_turns").fetchone()
+        self.assertNotIn("raw-event", row[0])
+        self.assertEqual(row[1], 1)
+        self.assertGreaterEqual(row[2], 0)
+        self.assertEqual(row[3], '["text"]')
 
     async def test_onebot_reply_cannot_import_another_group_or_private_peer(self):
         adapter = AiocqhttpAdapter.__new__(AiocqhttpAdapter)

@@ -84,6 +84,10 @@ def configure_policy(target: Path) -> None:
                 "route_simple_chat_tools": True,
             }
             changed = True
+        if provider.get("id") == "deepseek_chat" and isinstance(provider.get("companion_context"), dict):
+            if "summary_background" not in provider["companion_context"]:
+                provider["companion_context"]["summary_background"] = True
+                changed = True
     if changed:
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -203,7 +203,7 @@ def apply():
     context_policy = {
         "enabled": True, "input_budget": 16000, "recent_rounds": 12,
         "summary_max_tokens": 900, "summary_input_chars": 24000,
-        "route_simple_chat_tools": True,
+        "route_simple_chat_tools": True, "summary_background": True,
     }
     if isinstance(old_chat.get("companion_context"), dict):
         context_policy.update(old_chat["companion_context"])
@@ -290,6 +290,7 @@ def apply():
     config["agent_runner"]["config"]["persona"]["persona_id"] = "大肥鱼"
     config["agent_runner"]["config"]["misc"].update({"max_steps": 40, "tool_call_timeout": 300})
     from patch_chat_boundaries import configure_group_settings
+    from patch_experience import configure_experience_plugin
 
     configure_group_settings(config)
     config["kb_names"] = ["大肥鱼手册", "热梗词典"]
@@ -328,9 +329,6 @@ def apply():
                     "session_list": [session] if session else [],
                 }
             )
-            values["friend_settings"]["auto_trigger_settings"].update(
-                {"enable_auto_trigger": True, "auto_trigger_after_minutes": 30}
-            )
             values["friend_settings"]["context_settings"]["source_mode"] = "conversation_history"
             values["friend_settings"]["schedule_settings"].update(
                 {
@@ -340,11 +338,6 @@ def apply():
                     "max_unanswered_times": 2,
                 }
             )
-            if (
-                "想聊新鲜话题时可以先联网搜索。"
-                not in values["friend_settings"]["proactive_prompt"]
-            ):
-                values["friend_settings"]["proactive_prompt"] += "\n想聊新鲜话题时可以先联网搜索。"
             values["group_settings"].update({"enable": False, "session_list": []})
             values["web_admin"]["enabled"] = False
             values["telemetry_config"]["enabled"] = False
@@ -356,7 +349,7 @@ def apply():
         elif name == "stealer":
             values.update(
                 {
-                    "steal_meme": True,
+                    "steal_meme": values.get("steal_meme", True),
                     "vision_provider_id": "bailian_vision",
                     "emotion_analysis_provider_id": "deepseek_chat",
                     "enable_embedding_search": True,
@@ -412,6 +405,7 @@ def apply():
             values["optimizer_config"].update(
                 {"enable_optimizer": False, "optimizer_style": "日系插画大师"}
             )
+        configure_experience_plugin(name, values)
         write_json(path, values)
 
     network = {

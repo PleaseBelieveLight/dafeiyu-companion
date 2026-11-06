@@ -19,10 +19,13 @@ PATCHED_PATHS = (WAKE, WHITELIST, CRON_TOOLS, CRON_MANAGER, CRON_EVENTS, MESSAGE
                  CONVERSATIONS, QQ_ADAPTER, MAIN_AGENT)
 
 
-def patch(target, relative, *replacements):
+def patch(target, relative, *replacements, reverse=False):
     path = target / relative
     original = text = path.read_text(encoding="utf-8-sig")
-    for old, new in replacements:
+    for old, new in reversed(replacements) if reverse else replacements:
+        if reverse:
+            text = text.replace(new, old, 1)
+            continue
         if new in text:
             continue
         if text.count(old) != 1:

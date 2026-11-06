@@ -46,9 +46,11 @@ def managed_paths() -> list[Path]:
     """Identify the installed code and configuration touched by deployment."""
     from patch_chat_boundaries import MEMORY_SCOPE, PATCHED_PATHS
     from patch_chat_efficiency import MEMORY_RECALL_PATH
+    from patch_experience import EXPERIENCE_PATHS
 
     paths = []
     paths.extend(ROOT / relative for relative in PATCHED_PATHS)
+    paths.extend(ROOT / relative for relative in EXPERIENCE_PATHS)
     paths.append(ROOT / MEMORY_SCOPE)
     for folder in (SOURCE_ROOT / "overlays").iterdir():
         for path in folder.rglob("*"):

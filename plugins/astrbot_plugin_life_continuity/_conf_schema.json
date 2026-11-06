@@ -24,6 +24,11 @@
     "type": "bool",
     "default": false
   },
+  "followups_enabled": {
+    "description": "允许主人私聊显式记录和跟进记挂事项",
+    "type": "bool",
+    "default": false
+  },
   "web_search_enabled": {
     "description": "每轮先调用一次 AstrBot 当前会话已配置的联网搜索，保存最多三条带来源的摘要",
     "type": "bool",
