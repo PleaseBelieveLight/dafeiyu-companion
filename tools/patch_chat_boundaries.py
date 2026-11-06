@@ -106,20 +106,44 @@ def apply_chat_boundaries(target: Path) -> None:
         ('    fallback_providers = _get_fallback_chat_providers(\n',
          '    restrict_group_tools(event, req)\n\n    fallback_providers = _get_fallback_chat_providers(\n'),
     )
+    cron_manager_access = '        cron_mgr = context.context.context.cron_manager\n'
+    cron_call_guard = (
+        '        event = context.context.event\n'
+        '        if event.get_platform_name() == "cron" or event.get_extra("fy_proactive"):\n'
+        '            return "error: scheduled jobs cannot manage other schedules."\n'
+        '        if str(kwargs.get("action") or "").strip().lower() == "create":\n'
+    )
+    legacy_cron_call = (
+        cron_call_guard
+        + '            from astrbot.core.utils.task_receipts import create_task_once\n\n'
+        '            return await create_task_once(event, kwargs, lambda: self._call(context, **kwargs))\n'
+        '        return await self._call(context, **kwargs)\n\n'
+        '    async def _call(self, context: ContextWrapper[AstrAgentContext], **kwargs) -> ToolExecResult:\n'
+        + cron_manager_access
+    )
+    cron_tools = (target / CRON_TOOLS).read_text(encoding="utf-8-sig")
     patch(target, CRON_TOOLS,
         ("from astrbot import logger\n", "from astrbot import logger\nfrom astrbot.core.utils.chat_scope import owns_chat_job\n"),
         ('        _extract_job_session(job) == current_umo\n        and _extract_job_sender(job) == current_sender_id',
          '        owns_chat_job(_extract_job_session(job), _extract_job_sender(job), current_umo, current_sender_id)'),
-        ('        cron_mgr = context.context.context.cron_manager\n',
-         '        event = context.context.event\n'
-         '        if event.get_platform_name() == "cron" or event.get_extra("fy_proactive"):\n'
-         '            return "error: scheduled jobs cannot manage other schedules."\n'
-         '        if str(kwargs.get("action") or "").strip().lower() == "create":\n'
-         '            from astrbot.core.utils.task_receipts import create_task_once\n\n'
-         '            return await create_task_once(event, kwargs, lambda: self._call(context, **kwargs))\n'
-         '        return await self._call(context, **kwargs)\n\n'
-         '    async def _call(self, context: ContextWrapper[AstrAgentContext], **kwargs) -> ToolExecResult:\n'
-         '        cron_mgr = context.context.context.cron_manager\n'),
+        (legacy_cron_call if legacy_cron_call in cron_tools else cron_manager_access,
+         cron_call_guard
+         + '            return await self._create(context, kwargs)\n'
+         '        return await self._call(context, kwargs)\n\n'
+         '    async def schedule_text_reminder(\n'
+         '        self, context: ContextWrapper[AstrAgentContext], *, name: str, note: str, run_at: datetime\n'
+         '    ) -> ToolExecResult:\n'
+         '        kwargs = {"action": "create", "name": name, "note": note,\n'
+         '                  "run_once": True, "run_at": run_at.isoformat()}\n'
+         '        return await self._create(context, kwargs, text_reminder=True)\n\n'
+         '    async def _create(self, context, kwargs, *, text_reminder=False) -> ToolExecResult:\n'
+         '        from astrbot.core.utils.task_receipts import create_task_once\n\n'
+         '        return await create_task_once(context.context.event, kwargs,\n'
+         '                                      lambda: self._call(context, kwargs, text_reminder=text_reminder))\n\n'
+         '    async def _call(self, context, kwargs, *, text_reminder=False) -> ToolExecResult:\n'
+         + cron_manager_access),
+        ('                "origin": "tool",\n',
+         '                "origin": "chat_reminder" if text_reminder else "tool",\n'),
         ('            return f"Scheduled future task {job.job_id} ({job.name}) {suffix}."\n',
          '            from astrbot.core.utils.task_receipts import record_task_outcome\n\n'
          '            when = f"，下次 {next_run:%Y-%m-%d %H:%M}" if next_run else ""\n'
@@ -196,6 +220,20 @@ def apply_chat_boundaries(target: Path) -> None:
          '        )\n'
          '        if not llm_resp:\n            logger.warning("Cron job agent got no response")\n            return\n',
          '        if not llm_resp:\n            raise RuntimeError("Cron job agent got no response")\n'),
+    )
+    patch(target, CRON_MANAGER,
+        ('        await self._woke_main_agent(\n',
+         '        if payload.get("origin") == "chat_reminder" and delivery_session_str:\n'
+         '            from astrbot.core.message.message_event_result import MessageChain\n'
+         '            from astrbot.core.utils.task_receipts import send_reminder_once\n\n'
+         '            session = MessageSession.from_str(session_str)\n'
+         '            event = CronMessageEvent(context=self.ctx, session=session, message=note,\n'
+         '                                     extras=extras, message_type=session.message_type)\n'
+         '            text = MessageChain().message(f"到时间了，{note}。")\n'
+         '            if not await send_reminder_once(self.ctx, event, text):\n'
+         '                raise RuntimeError("No delivery recorded for the scheduled text reminder")\n'
+         '            return\n\n'
+         '        await self._woke_main_agent(\n'),
     )
     patch(target, CRON_EVENTS,
         ('from astrbot.core.platform.platform_metadata import PlatformMetadata\n',

@@ -1,17 +1,21 @@
-"""Provide trusted schedule data when the current speaker asks about it."""
+"""Handle explicit reminders and provide the current speaker's schedule."""
 
 import copy
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.agent.message import TextPart
+from astrbot.core.astr_agent_context import AgentContextWrapper, AstrAgentContext
+from astrbot.core.message.components import At, Plain
 from astrbot.core.message.message_event_result import MessageChain
-from astrbot.core.tools.cron_tools import _job_belongs_to_current_sender
+from astrbot.core.platform.message_type import MessageType
+from astrbot.core.tools.cron_tools import FutureTaskTool, _job_belongs_to_current_sender
 from astrbot.core.utils.context_parts import set_temporary_context
+from astrbot.core.utils.conversation_turn import note_result
 from astrbot.core.utils.task_receipts import recent_reminders
 
 MARKER = "【本轮程序日程】"
@@ -30,6 +34,30 @@ UNVERIFIED_CHANGE = re.compile(
     r"(?:设置|安排|创建|修改|取消|删除)成功|(?:提醒|日程).{0,10}(?:设好了|安排好了)|"
     r"(?:我会|我来|到时(?:候)?我).{0,8}(?:提醒|叫你|催你)"
 )
+_DIGITS = "零一二三四五六七八九"
+_NUMBER = r"(?:[0-9]{1,4}|[一二两三四五六七八九]?十[一二三四五六七八九]?|[一二两三四五六七八九])"
+_REMINDER = re.compile(
+    r"(?:请创建一个名为[“‘\"](?P<name>[^”’\"\n]{1,40})[”’\"]的一次性任务[，,]\s*)?"
+    r"(?:请|帮我|麻烦你)?\s*"
+    rf"(?:(?P<delay>{_NUMBER})\s*(?P<unit>分钟|小时)后|"
+    r"(?P<day>今天|明天)\s*(?P<hour>[0-9]{1,2})(?:[:：](?P<minute>[0-9]{2})|点))"
+    r"\s*[，,]?\s*提醒我\s*(?P<note>[^\s，,。；;？！!?\n][^，,。；;？！!?\n]{0,99})[。！!]?\s*"
+)
+
+
+def _reminder_time(match, received):
+    if delay := match["delay"]:
+        delay = delay.replace("两", "二")
+        if delay.isascii():
+            count = int(delay)
+        elif "十" in delay:
+            tens, _, ones = delay.partition("十")
+            count = _DIGITS.index(tens or "一") * 10 + _DIGITS.index(ones or "零")
+        else:
+            count = _DIGITS.index(delay)
+        return received.astimezone(timezone.utc) + timedelta(minutes=count * (60 if match["unit"] == "小时" else 1))
+    day = received + timedelta(days=match["day"] == "明天")
+    return day.replace(hour=int(match["hour"]), minute=int(match["minute"] or 0), second=0, microsecond=0)
 
 
 def local_time(value, tz_name: str) -> str:
@@ -76,6 +104,49 @@ def format_schedule(jobs) -> str:
 class ScheduleAwarenessPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
+
+    @filter.on_llm_request(priority=-210)
+    async def schedule_explicit_reminder(self, event: AstrMessageEvent, req) -> None:
+        if (event.get_platform_name() != "aiocqhttp" or event.get_extra("cron_job")
+                or event.get_extra("fy_proactive")
+                or event.get_message_type() not in (MessageType.FRIEND_MESSAGE, MessageType.GROUP_MESSAGE)
+                or any(not (isinstance(part, Plain) or isinstance(part, At) and str(part.qq) == event.get_self_id())
+                       for part in event.get_messages())):
+            return
+        match = _REMINDER.fullmatch((event.get_message_str() or "").strip())
+        if not match or match["note"].rstrip().endswith(("吗", "么", "呢", "可不可以", "行不行")):
+            return
+        tool = req.func_tool.get_tool("future_task") if req.func_tool else None
+        if not isinstance(tool, FutureTaskTool):
+            return
+
+        event.stop_event()
+        tz_name = self.context.get_config(umo=event.unified_msg_origin).get("timezone")
+        try:
+            tz = ZoneInfo(tz_name or "Asia/Shanghai")
+        except (ValueError, ZoneInfoNotFoundError):
+            tz = timezone.utc
+        now = datetime.now(tz)
+        received = datetime.fromtimestamp(event.message_obj.timestamp, tz)
+        try:
+            run_at = _reminder_time(match, received)
+        except ValueError:
+            await event.send(event.plain_result("这个时间对不上，你想几点收到提醒？"))
+            return
+        if run_at <= now:
+            await event.send(event.plain_result("这个时间已经过了，你想改到几点？"))
+            return
+
+        wrapper = AgentContextWrapper(context=AstrAgentContext(context=self.context, event=event))
+        note = match["note"].strip()
+        try:
+            await tool.schedule_text_reminder(wrapper, name=match["name"] or note, note=note, run_at=run_at)
+        except Exception as exc:
+            logger.warning("[schedule_awareness] 提醒创建待核对 (%s)", type(exc).__name__)
+        outcomes = event.get_extra("dafeiyu_task_outcomes")
+        note_result("reminder_scheduled" if outcomes else "reminder_unconfirmed")
+        reply = outcomes[-1] if outcomes else "这次提醒还没确认创建，你可以先查一下当前提醒。"
+        await event.send(event.plain_result(reply))
 
     @filter.on_llm_request()
     async def inject_schedule(self, event: AstrMessageEvent, req) -> None:

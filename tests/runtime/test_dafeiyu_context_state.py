@@ -5,7 +5,7 @@ import importlib
 import json
 import unittest
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -19,6 +19,7 @@ from astrbot.core.conversation_mgr import ConversationManager
 from astrbot.core.cron.events import CronMessageEvent
 from astrbot.core.cron.manager import CronJobManager, CronJobSchedulingError
 from astrbot.core.db.po import CronJob
+from astrbot.core.db.sqlite import SQLiteDatabase
 from astrbot.core.message.components import At, AtAll, Image, Plain, Reply
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.pipeline.waking_check import stage as waking
@@ -31,6 +32,7 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.platform.platform_metadata import PlatformMetadata
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpAdapter
 from astrbot.core.provider.entities import LLMResponse, ProviderRequest
+from astrbot.core.star.context import Context
 from astrbot.core.tools.cron_tools import FutureTaskTool
 from astrbot.core.tools.message_tools import SendMessageToUserTool
 from astrbot.core.utils import chat_efficiency, chat_scope, conversation_turn, task_receipts
@@ -374,6 +376,61 @@ class ContextStateTests(unittest.IsolatedAsyncioTestCase):
             response = LLMResponse(role="assistant", completion_text=draft)
             await plugin.use_task_receipt(no_receipt, request, response)
             self.assertIn(expected, response.completion_text)
+
+    async def test_plain_qq_reminder_creates_and_delivers_without_a_model(self):
+        transport, bot = self.qq_transport()
+        context = Mock(spec=Context)
+        context.platform_manager = transport.platform_manager
+        context.get_config.return_value = {**transport.get_config(), "timezone": "Asia/Shanghai"}
+        db = SQLiteDatabase(str(self.folder / "cron.db"))
+        await db.initialize()
+        self.addAsyncCleanup(db.engine.dispose)
+        scheduler = context.cron_manager = CronJobManager(db)
+        await scheduler.start(context)
+        self.addAsyncCleanup(scheduler.shutdown)
+        scheduler._woke_main_agent = AsyncMock()
+        plugin = schedule_module.ScheduleAwarenessPlugin(context)
+        request = ProviderRequest(func_tool=ToolSet([FutureTaskTool()]))
+
+        text = "两分钟后提醒我休息一下"
+        message = AstrBotMessage()
+        message.type, message.message_id = MessageType.FRIEND_MESSAGE, "private-reminder"
+        message.sender = MessageMember(user_id="1", nickname="发起人")
+        message.message = [Plain(text)]
+        event = AstrMessageEvent(text, message, PlatformMetadata("aiocqhttp", "test QQ", id="qq"), "1")
+        event.send = AsyncMock()
+        await plugin.schedule_explicit_reminder(event, request)
+
+        self.assertTrue(event.is_stopped())
+        (job,) = await scheduler.list_jobs("active_agent")
+        self.assertTrue(job.run_once)
+        self.assertEqual(job.payload["session"], "qq:FriendMessage:1")
+        self.assertEqual(job.payload["sender_id"], "1")
+        expected = datetime.fromtimestamp(message.timestamp, timezone.utc) + timedelta(minutes=2)
+        self.assertEqual(scheduler.get_next_run_time(job.job_id), expected)
+        self.assertIn("已安排提醒「休息一下」", event.send.await_args.args[0].get_plain_text())
+        bot.send_private_msg.assert_not_awaited()
+
+        await scheduler._run_job(job.job_id, delete_run_once=False)
+        await scheduler._run_job(job.job_id, delete_run_once=False)
+        scheduler._woke_main_agent.assert_not_awaited()
+        bot.send_group_msg.assert_not_awaited()
+        bot.send_private_msg.assert_awaited_once()
+        self.assertEqual(bot.send_private_msg.await_args.kwargs["user_id"], 1)
+        self.assertEqual(task_receipts.confirmed_reminder_texts(f"{job.job_id}:once"), ["到时间了，休息一下。"])
+
+    def test_explicit_reminder_time_and_ambiguous_text(self):
+        received = datetime(2026, 11, 6, 15, 39, 25, tzinfo=timezone.utc)
+        pattern = schedule_module._REMINDER
+        for text, expected in (
+            ("请创建一个名为‘体验日程提醒’的一次性任务，十分钟后提醒我休息一下", received + timedelta(minutes=10)),
+            ("今天 16:05 提醒我交材料", received.replace(hour=16, minute=5, second=0)),
+            ("明天9点提醒我交材料", datetime(2026, 11, 7, 9, tzinfo=timezone.utc)),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(schedule_module._reminder_time(pattern.fullmatch(text), received), expected)
+        for text in ("你能两分钟后提醒我吗？", "别两分钟后提醒我", "两分钟后提醒我", "两分钟后提醒我交材料，再发给同事"):
+            self.assertIsNone(pattern.fullmatch(text))
 
     async def test_reminder_with_lost_ack_keeps_unknown_delivery_without_resending(self):
         context, bot = self.qq_transport()
