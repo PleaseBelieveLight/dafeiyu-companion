@@ -14,7 +14,7 @@ from itertools import count
 
 from astrbot.core.message.components import Face, Image, Plain, Record, Video
 
-from .context_parts import chat_turn_preference
+from .context_parts import chat_turn_preference, set_temporary_context
 
 
 JOIN_SECONDS = 0.18
@@ -37,6 +37,13 @@ _DEVICE_NAMES = {"get_screenshot", "browser_task", "listen_audio", "local_python
                  "shell_session", "file_read", "file_write", "file_edit", "grep"}
 _DEVICE_SERVERS = {"browser-use", "phone-mcp", "dafeiyu-admin"}
 _MEDIA_STOP = re.compile(r"^(?:取消|停止|不用|别|先别|不要)(?:了|(?:再)?(?:发|生成|画|拍|解析|放|点|播).{0,12}|(?:图片|自拍|视频|点歌|解析))?[。！!\s]*$")
+_MUSIC = re.compile(
+    r"(?:点|放)(?:一|几|两)?(?:首|支)?歌|(?:来|换|推荐|找|搜)(?:一|几|两)?首"
+    r"|(?:来|放|播|播放).{0,12}音乐|听.{0,12}(?:歌|音乐)|歌词"
+    r"|(?:播放|放一下).{1,40}|(?:想|要)听(?![你您]|听[你您]|一下[你您])[^，。！？!?\s]"
+)
+_MUSIC_TOOLS = {"play_song_by_name", "query_lyrics_by_name"}
+_MUSIC_STATE = "【本轮点歌状态】"
 
 
 def is_action(text):
@@ -73,9 +80,30 @@ def media_cancelled(text):
     return bool(_MEDIA_STOP.fullmatch(re.sub(r"^不是[，,\s]*", "", (text or "").strip())))
 
 
+def wants_music(text):
+    return not media_cancelled(text) and bool(_MUSIC.search(text or ""))
+
+
+def _music_followup(text, contexts):
+    """A bare song title can answer the immediately preceding song question."""
+    if not text or len(text) > 80 or is_action(text) or media_cancelled(text):
+        return False
+    tail = [entry for entry in contexts[-5:] if isinstance(entry, dict)
+            and entry.get("role") in {"user", "assistant"}]
+    if len(tail) < 2 or tail[-2].get("role") != "user" or tail[-1].get("role") != "assistant":
+        return False
+    from .chat_efficiency import message_text
+
+    return bool(wants_music(message_text(tail[-2])) and re.search(
+        r"歌名|哪(?:一)?首|什么歌|想听什么|哪(?:一)?位歌手|谁的歌", message_text(tail[-1])))
+
+
 def route_capabilities(event, request):
     tools = request.func_tool
-    if not tools or event.get_extra("cron_job") or event.get_extra("background_task_result"):
+    if event.get_extra("cron_job") or event.get_extra("background_task_result"):
+        return
+    set_temporary_context(request, _MUSIC_STATE, "")
+    if not tools:
         return
     text = event.get_message_str() or ""
     plain = re.sub(r"^(?:\[[^\]\n]{1,70}\]\s*)+", "", text).strip()
@@ -93,6 +121,7 @@ def route_capabilities(event, request):
     recall = has_recall_topic(plain)
     explicit_meme = bool(re.search(r"(?:发|找|来|存|收藏|收下).{0,8}(?:表情包|这个表情)|表情包.{0,4}(?:发|给我)|(?:偷|收|收藏).{0,5}(?:这张图|一下)", plain))
     explicit_schedule = bool(re.search(r"提醒|日程|定时|催我|到点叫我", plain))
+    music = wants_music(plain) or _music_followup(plain, contexts)
     social = bool(_SOCIAL.fullmatch(plain) or chat_turn_preference(plain) in {"company", "guess"} or advice_declined(plain))
     if not plain and any(isinstance(part, (Face, Image)) for part in event.get_messages()):
         social = True
@@ -106,12 +135,21 @@ def route_capabilities(event, request):
         and (explicit_schedule or tool.name != "future_task")
         and (explicit_device or tool.name != "send_message_to_user")
         and (explicit_meme or tool.name not in {"search_meme", "send_meme", "steal_meme"})
-        and (re.search(r"点歌|放歌|听.{0,8}(?:歌|音乐)|歌词", plain) or tool.name not in {"play_song_by_name", "query_lyrics_by_name"})
+        and (music or tool.name not in _MUSIC_TOOLS)
         and (re.search(r"(?:解析|提取|下载).{0,16}(?:https?://|链接|视频)", plain) or tool.name != "parse_media_url")
         and (re.search(r"(?:戳一戳|戳我|戳一下)", plain) or tool.name != "llm_poke_user")
         and (not social or recall and tool.name.startswith(("recall_", "memorize_")))
     )]
     request.func_tool = selected
+    music_tools = [tool.name for tool in selected.tools
+                   if tool.name in _MUSIC_TOOLS and getattr(tool, "active", True)]
+    if music_tools:
+        set_temporary_context(request, _MUSIC_STATE,
+            "本轮可用点歌工具：" + "、".join(music_tools) + "。"
+            "点歌通过工具搜索并发送歌曲，与本人唱歌、普通聊天语音开关不同。"
+            "对方明确了歌名或歌手时按其要求调用；只说点首歌且没有指定时，"
+            "先自然询问想听哪首或什么类型，不编造歌名，不声称无法点歌。"
+            "是否发送成功以工具结果为准，不提前声称已播放。")
     if explicit_meme:
         note_result("meme_requested" if any(t.name in {"search_meme", "send_meme", "steal_meme"}
                                             for t in selected.tools) else "meme_unavailable")

@@ -12,17 +12,83 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.message.components import Record
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
+from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.utils.conversation_turn import route_capabilities
 
 sender_module = importlib.import_module("data.plugins.astrbot_plugin_music.core.sender")
 delivery = importlib.import_module("data.plugins.astrbot_plugin_music.core.local_delivery")
 cache_module = importlib.import_module("data.plugins.astrbot_plugin_music.core.song_cache")
 downloader_module = importlib.import_module("data.plugins.astrbot_plugin_music.core.downloader")
 Song = importlib.import_module("data.plugins.astrbot_plugin_music.core.model").Song
+
+
+class MusicRoutingTests(unittest.TestCase):
+    def route(self, text, contexts=None, active=True):
+        event = SimpleNamespace(get_message_str=lambda: text, get_extra=lambda _: None,
+                                get_messages=lambda: [])
+        tools = ToolSet([FunctionTool(name=name, description=name, parameters={}, active=active)
+                         for name in ("play_song_by_name", "query_lyrics_by_name")])
+        request = ProviderRequest(func_tool=tools, contexts=contexts or [])
+        route_capabilities(event, request)
+        self.assertEqual(tools.names(), ["play_song_by_name", "query_lyrics_by_name"])
+        return event, tools, request
+
+    def test_natural_music_requests_keep_the_native_tools(self):
+        for text in ("点首歌", "点一首歌", "放首歌", "给我放一首歌吧", "来首歌",
+                     "来一首周杰伦的晴天", "来点音乐", "播放《成都》", "我想听成都",
+                     "我想听周杰伦的晴天", "我想听听晴天", "放一下稻香", "查一下晴天的歌词",
+                     "[语音转写] 点首歌"):
+            with self.subTest(text=text):
+                _, _, request = self.route(text)
+                self.assertIn("play_song_by_name", request.func_tool.names())
+                state = request.extra_user_content_parts[-1]
+                self.assertTrue(state["_no_save"])
+                self.assertIn("先自然询问", state["text"])
+                self.assertIn("与本人唱歌、普通聊天语音开关不同", state["text"])
+
+    def test_a_song_title_can_answer_the_previous_music_question(self):
+        contexts = [{"role": "user", "content": "点首歌"},
+                    {"role": "assistant", "content": "你想听哪首？告诉我歌名就行。"}]
+        _, _, request = self.route("成都", contexts)
+        self.assertIn("play_song_by_name", request.func_tool.names())
+        self.assertEqual(request.contexts, contexts)
+        # A different conversation topic breaks the short follow-up window.
+        contexts += [{"role": "user", "content": "明天上班吗"},
+                     {"role": "assistant", "content": "看你的排班。"}]
+        _, _, request = self.route("成都", contexts)
+        self.assertEqual(request.func_tool.names(), [])
+
+    def test_social_voice_and_cancel_turns_do_not_offer_music(self):
+        contexts = [{"role": "user", "content": "点首歌"},
+                    {"role": "assistant", "content": "想听哪首？"}]
+        for text in ("你好", "我想听你说话", "我想听听你说话", "取消点歌", "先别放歌"):
+            with self.subTest(text=text):
+                _, _, request = self.route(text)
+                self.assertEqual(request.func_tool.names(), [])
+                if "取消" in text or "先别" in text:
+                    _, _, request = self.route(text, contexts)
+                    self.assertEqual(request.func_tool.names(), [])
+
+    def test_state_is_refreshed_and_never_claims_disabled_or_missing_tools(self):
+        event, tools, request = self.route("点首歌")
+        request.func_tool = tools
+        route_capabilities(event, request)
+        self.assertEqual(len(request.extra_user_content_parts), 1)
+        event.get_message_str = lambda: "你好"
+        request.func_tool = tools
+        route_capabilities(event, request)
+        self.assertEqual(request.extra_user_content_parts, [])
+        _, _, request = self.route("点首歌", active=False)
+        self.assertEqual(request.extra_user_content_parts, [])
+        request.func_tool = None
+        route_capabilities(event, request)
+        self.assertEqual(request.extra_user_content_parts, [])
 
 
 def fixture(path: Path):

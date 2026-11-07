@@ -1,13 +1,19 @@
 """Exercise the patched Stealer entry points without downloading or classifying images."""
 
+import tempfile
 import threading
+import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from astrbot.api.message_components import Image, Plain, Reply
+from PIL import Image as PILImage
+
+from astrbot.api.message_components import File, Image, Plain, Reply
 from data.plugins.astrbot_plugin_stealer.core.commands.command_handler import CommandHandler
 from data.plugins.astrbot_plugin_stealer.core.events.event_handler import EventHandler
+from data.plugins.astrbot_plugin_stealer.core.events.image_download_service import ImageDownloadService
 from data.plugins.astrbot_plugin_stealer.main import Main
 
 
@@ -101,3 +107,95 @@ class MemeCaptureTests(unittest.IsolatedAsyncioTestCase):
         self.handler._handle_force_capture.assert_awaited_once_with(image, self.plugin, [self.image], [])
         image.send.assert_awaited_once_with("已收录")
         self.assertTrue(image.is_stopped())
+
+    async def test_command_window_captures_remote_gif_files_without_ai_fallthrough(self):
+        command = self.event(Plain(text="/meme 偷"))
+        self.plugin.begin_force_capture(command, 30)
+        attachment = File(name="sticker.GIF", url="https://example.invalid/download?id=1")
+
+        other_sender = self.event(attachment, sender="1002")
+        await Main.on_message(self.plugin, other_sender)
+        self.assertFalse(other_sender.is_stopped())
+        self.handler._handle_force_capture.assert_not_awaited()
+
+        event = self.event(attachment)
+        await Main.on_message(self.plugin, event)
+        self.assertTrue(event.is_stopped())
+        self.assertIsNone(self.plugin.get_force_capture_entry(event))
+        args = self.handler._handle_force_capture.await_args.args
+        self.assertEqual(args[:2], (event, self.plugin))
+        self.assertEqual(args[2][0].file, attachment.url)
+        event.send.assert_awaited_once_with("已收录")
+        self.plugin._steal_sticker_impl.assert_not_called()
+
+        following = self.event(attachment)
+        await Main.on_message(self.plugin, following)
+        self.assertFalse(following.is_stopped())
+        self.handler._handle_force_capture.assert_awaited_once()
+
+    async def test_ordinary_and_expired_file_messages_do_not_capture(self):
+        attachment = File(name="sticker.gif", url="https://example.invalid/download")
+        ordinary = self.event(attachment)
+        await Main.on_message(self.plugin, ordinary)
+        self.assertFalse(ordinary.is_stopped())
+
+        self.plugin.begin_force_capture(ordinary, 30)
+        document = self.event(File(name="document.pdf", url="https://example.invalid/document"))
+        await Main.on_message(self.plugin, document)
+        self.assertFalse(document.is_stopped())
+        self.assertIsNotNone(self.plugin.get_force_capture_entry(document))
+
+        with patch("time.time", return_value=time.time() + 31):
+            expired = self.event(attachment)
+            await Main.on_message(self.plugin, expired)
+        self.assertFalse(expired.is_stopped())
+        self.handler._handle_force_capture.assert_not_awaited()
+
+    async def test_unreadable_gif_file_reports_failure_without_ai_fallthrough(self):
+        event = self.event(File(name="sticker.gif"))
+        self.plugin.begin_force_capture(event, 30)
+        await Main.on_message(self.plugin, event)
+        self.assertTrue(event.is_stopped())
+        self.assertIsNone(self.plugin.get_force_capture_entry(event))
+        self.assertIn("收录失败", event.send.await_args.args[0])
+        self.handler._handle_force_capture.assert_not_awaited()
+
+    async def test_private_direct_and_quoted_gif_files_support_explicit_capture(self):
+        attachment = File(name="sticker.gif", url="https://example.invalid/download")
+        for part in (attachment, Reply(id="quoted", chain=[attachment])):
+            with self.subTest(part=type(part).__name__):
+                event = self.event(part, Plain(text="帮我偷一下这张图"))
+                await Main.on_message(self.plugin, event)
+                self.assertTrue(event.is_stopped())
+                self.plugin._steal_sticker_impl.assert_called_with(event, attachment.url)
+                event.send.assert_awaited_once_with("已入库")
+
+    async def test_local_gif_file_keeps_all_frames_and_preserves_the_original(self):
+        with tempfile.TemporaryDirectory() as folder:
+            original = Path(folder) / "sticker.gif"
+            frames = [PILImage.new("RGB", (2, 2), color) for color in ("red", "blue")]
+            frames[0].save(original, save_all=True, append_images=frames[1:], duration=100, loop=0)
+            original_bytes = original.read_bytes()
+            self.handler._image_download_service = ImageDownloadService()
+            self.handler._handle_force_capture = EventHandler._handle_force_capture.__get__(self.handler)
+
+            async def process_image(event, temp_path, **kwargs):
+                self.assertTrue(event.is_stopped())
+                self.assertIsNone(self.plugin.get_force_capture_entry(event))
+                self.assertTrue(kwargs["is_temp"])
+                self.assertNotEqual(Path(temp_path), original)
+                self.assertEqual(Path(temp_path).read_bytes(), original_bytes)
+                with PILImage.open(temp_path) as image:
+                    self.assertEqual(image.n_frames, 2)
+                Path(temp_path).unlink()
+                return True, {"saved.gif": {"category": "happy"}}
+
+            self.plugin._process_image = AsyncMock(side_effect=process_image)
+            self.plugin.index_manager = SimpleNamespace(save_index=AsyncMock())
+            event = self.event(File(name="sticker.gif", file=str(original)))
+            self.plugin.begin_force_capture(event, 30)
+            await Main.on_message(self.plugin, event)
+            self.plugin._process_image.assert_awaited_once()
+            self.plugin.index_manager.save_index.assert_awaited_once()
+            self.assertEqual(original.read_bytes(), original_bytes)
+            self.assertIn("已收录", event.send.await_args.args[0].chain[0].text)

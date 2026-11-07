@@ -29,6 +29,7 @@ def main():
             "tests.test_dafeiyu_selfie_intent",
             "tests.test_dafeiyu_image_reply",
             "tests.test_dafeiyu_music_delivery",
+            "tests.test_dafeiyu_meme_capture",
             "tests.test_dafeiyu_proactive_context",
             "tests.test_dafeiyu_context_state",
             "tests.test_dafeiyu_provider_budget",

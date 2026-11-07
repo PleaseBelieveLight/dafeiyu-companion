@@ -1047,10 +1047,14 @@ class FaceConvertPlugin(Star):
         except Exception as exc:
             logger.warning("Selfie context unavailable (%s).", type(exc).__name__)
         media_names = [name for name in media_names if tools.get_tool(name) is not None]
+        available_media = media_names + [
+            name for name in ("play_song_by_name", "query_lyrics_by_name")
+            if tools is not None and (tool := tools.get_tool(name)) is not None and tool.active
+        ]
         media_state = (
             "本轮自拍已成功发给对方，发图请求已完成。接着这张图自然回应即可。"
             if selfie_sent
-            else "本轮可用媒体工具：" + ("、".join(media_names) or "无") + "。"
+            else "本轮可用媒体工具：" + ("、".join(available_media) or "无") + "。"
         )
         marker = "【当前会话语音状态】"
         # Keep protocol and style stable. Time, permissions and recent activity

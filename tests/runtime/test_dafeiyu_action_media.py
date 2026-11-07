@@ -88,6 +88,18 @@ class ActionMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.func_tool.names(), [])
         self.assertNotIn("<fy_reply>", temporary_text(request))
 
+    async def test_music_tools_remain_available_when_chat_voice_is_off(self):
+        plugin, event, _, _, _, _ = fixture("", {"tts_enabled": False})
+        event.get_message_str.return_value = "点首歌"
+        request = SimpleNamespace(system_prompt="Existing persona.", func_tool=ToolSet([
+            FunctionTool(name="play_song_by_name", description="", parameters={}),
+            FunctionTool(name="query_lyrics_by_name", description="", parameters={}, active=False),
+        ]))
+        with patch.object(face_module.sp, "get_async", new=AsyncMock(return_value={"tts_enabled": False})):
+            await plugin.inject_voice_status(event, request)
+        self.assertIn("本轮可用媒体工具：play_song_by_name。", temporary_text(request))
+        self.assertIn("本次不允许语音", temporary_text(request))
+
     async def test_hook_does_not_grant_missing_tools_or_voice_permission(self):
         plugin, event, _, _, _, _ = fixture("", {"tts_enabled": False})
         request = SimpleNamespace(system_prompt="Existing persona.", func_tool=None)
