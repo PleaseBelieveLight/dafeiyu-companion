@@ -33,12 +33,16 @@
   maintained pages need it. Record completed phases, one-off investigations, and test runs in
   commit messages, PRs, or Git history. When a plan closes, move durable instructions, known
   limits, and open acceptance items into the owning guide, then retire the redundant pages.
-- Keep program inputs in `content/`, including personas, knowledge sources, and acceptance
-  materials written in Markdown. Record consumers, read triggers, and change impacts in
-  `content/README.md`, including whether optional templates are read automatically.
+- Reserve `content/` for maintained inputs used by normal product features, such as personas
+  and knowledge sources. Do not put development fixtures, sample research texts, acceptance
+  checklists, reports, or one-off verification materials there. Record real consumers, read
+  triggers, and change impacts in `content/README.md`.
+- Build test inputs inline or in temporary files under the tests' control. Do not add permanent
+  documents solely to feed tests or acceptance tools, or make automated checks depend on them.
+  Manual acceptance tools must accept explicitly supplied user materials when input is needed.
 - Startup, knowledge initialization, and acceptance tools must work without `docs/`; documentation
-  checks and release scans are exceptions. Keep content used by both people and programs once in
-  `content/`, with links from `docs/`.
+  checks and release scans are exceptions. Keep maintained product inputs used by both people
+  and programs once in `content/`, with links from `docs/`.
 - Verify documented commands, paths, and defaults against the current source. Label any retained
   historical measurements with their date and scope. When moving, renaming, or removing files,
   check references and update links, indexes, script readers, and knowledge import paths together.

@@ -36,7 +36,7 @@ from astrbot.core.utils.image_reply import (
     IMAGE_REPLY_INSTRUCTIONS,
     IMAGE_REPLY_MARKER,
     IMAGE_TURN_MARKER,
-    image_turn_reminder,
+    IMAGE_TURN_REMINDER,
 )
 from astrbot.core.utils.selfie_context import SELFIE_MEMORY_KEY
 from astrbot.core.utils.selfie_intent import (
@@ -882,7 +882,7 @@ class FaceConvertPlugin(Star):
                 and str(part.get("text", "")).startswith(IMAGE_TURN_MARKER)
             )
         ]
-        req.extra_user_content_parts.append(TextPart(text=image_turn_reminder(req)).mark_as_temp())
+        req.extra_user_content_parts.append(TextPart(text=IMAGE_TURN_REMINDER).mark_as_temp())
 
     @filter.on_llm_request()
     async def inject_company_style(self, event: AstrMessageEvent, req) -> None:

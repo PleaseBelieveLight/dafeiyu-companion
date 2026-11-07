@@ -206,6 +206,15 @@ python tools/life_trial.py report --trial-id <trial_id>
 python tools/life_trial.py snapshot --trial-id <trial_id>
 ```
 
+准备验收研究时，通过 `--source-file` 指定自己提供的 UTF-8 文字资料：
+
+```powershell
+python tools/life_trial.py prepare --source-file "<资料文件路径>"
+```
+
+相对路径以源码根目录为起点，也可指定仓库外的绝对路径。工具将前 2000 个字符提交为研究来源；
+未指定文件、文件不可读或内容为空时会提示参数错误。资料只在显式执行这条命令时读取。
+
 记忆保存超时后先用 `python tools/life_trial.py memory-status` 查看写入状态，再用
 `python tools/life_trial.py recall` 核对是否能召回。一次未命中仍按待核实处理，直到有可靠依据确认写入结果。
 待核实期间保留原账本，以同一条经历核对。

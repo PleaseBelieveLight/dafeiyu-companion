@@ -2,7 +2,6 @@
 
 import copy
 import importlib
-import json
 import unittest
 from types import SimpleNamespace
 
@@ -14,7 +13,7 @@ from astrbot.core.agent.message import (
 )
 from astrbot.core.message.components import Image, Plain, Reply
 from astrbot.core.provider.entities import ProviderRequest
-from astrbot.core.utils.image_reply import IMAGE_TURN_MARKER, image_turn_reminder
+from astrbot.core.utils.image_reply import IMAGE_TURN_MARKER, IMAGE_TURN_REMINDER
 
 face_module = importlib.import_module("data.plugins.astrbot_plugin_face_convert.main")
 
@@ -101,7 +100,8 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
         caption = TextPart(text="<image_caption>卡通人物举着‘没钱了’的牌子。</image_caption>")
         req = ProviderRequest(prompt="[对方发来一张图片或表情包]", extra_user_content_parts=[caption])
         await self.plugin.inject_image_reply_style(self.event(), req)
-        self.assertIn("用户自己确认后", req.system_prompt)
+        self.assertIn("可以顺梗调侃或试探", req.system_prompt)
+        self.assertIn("不当作用户已确认的现实情况或长期记忆", req.system_prompt)
         self.assertIs(req.extra_user_content_parts[0], caption)
 
     async def test_company_turn_adds_a_temporary_lead_without_a_topic_menu(self):
@@ -127,7 +127,8 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.inject_image_reply_style(self.event(), req)
         assembled = await req.assemble_context()
         self.assertIn(IMAGE_TURN_MARKER, str(assembled))
-        self.assertIn("上班好累啊", str(assembled))
+        self.assertNotIn("上班好累啊", str(assembled))
+        self.assertEqual(req.contexts, [{"role": "user", "content": "上班好累啊"}])
         persisted = dump_messages_with_checkpoints(bind_checkpoint_messages([assembled]))
         self.assertNotIn(IMAGE_TURN_MARKER, str(persisted))
         self.assertEqual(
@@ -135,7 +136,7 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
             [req.prompt, caption.text],
         )
 
-    async def test_same_image_keeps_distinct_context_and_does_not_force_a_meme_intent(self):
+    async def test_same_image_preserves_context_without_repeating_the_previous_topic(self):
         reminders = []
         for topic in ("上班好累啊", "哈哈，刚才逗你的", "帮我排查这个截图的报错"):
             req = ProviderRequest(
@@ -143,16 +144,18 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
                 image_urls=["https://example.invalid/same-image.png"],
                 contexts=[{"role": "user", "content": topic}],
             )
+            original = copy.deepcopy(req.contexts)
             await self.plugin.inject_image_reply_style(self.event(), req)
             reminder = req.extra_user_content_parts[-1]
             self.assertTrue(reminder._no_save)
-            self.assertIn(topic, reminder.text)
-            payload = json.loads(reminder.text.split("\n", 1)[1].rsplit("\n", 1)[0])
-            self.assertEqual(payload["recent_dialogue"], [{"role": "user", "text": topic}])
-            self.assertEqual(payload["last_user_text"], topic)
+            self.assertNotIn(topic, reminder.text)
+            self.assertEqual(req.contexts, original)
+            assembled = await req.assemble_context()
+            self.assertEqual(str([*req.contexts, assembled]).count(topic), 1)
+            self.assertEqual(str(assembled).count(req.prompt), 1)
             self.assertEqual(req.prompt, "看看这个")
             reminders.append(reminder.text)
-        self.assertEqual(len(set(reminders)), 3)
+        self.assertEqual(set(reminders), {IMAGE_TURN_REMINDER})
 
     async def test_retry_refreshes_only_owned_hint_and_keeps_other_temporary_parts(self):
         unrelated = TextPart(text="<system_reminder>其它插件提示</system_reminder>").mark_as_temp()
@@ -167,63 +170,43 @@ class ImageReplyTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.inject_image_reply_style(self.event(), req)
         self.assertIs(req.extra_user_content_parts[0], unrelated)
         self.assertEqual(len(req.extra_user_content_parts), 2)
-        self.assertIn("现在换个话题", req.extra_user_content_parts[-1].text)
+        self.assertEqual(req.extra_user_content_parts[-1].text, IMAGE_TURN_REMINDER)
+        self.assertNotIn("旧内容", str(req.extra_user_content_parts))
+        self.assertEqual(req.contexts, [{"role": "user", "content": "现在换个话题"}])
         self.assertNotIn("旧版规则", req.system_prompt)
 
-
-class ImageDialogueTests(unittest.TestCase):
-    def test_context_extracts_dialogue_without_paths_runtime_notes_or_tool_output(self):
-        req = ProviderRequest(
-            prompt="[对方发来一张图片或表情包]",
-            contexts=[
-                {"role": "system", "content": "不属于对话"},
-                {"role": "user", "content": "今天上班好累"},
-                {
-                    "role": "assistant",
-                    "content": '<fy_reply>{"text":"先歇会儿。","voice":""}</fy_reply>',
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "[对方发来一张图片或表情包]"},
-                        {"type": "text", "text": "<system_reminder>运行时间</system_reminder>"},
-                        {"type": "text", "text": "[Image 1: original path private-file.png]"},
-                        {"type": "text", "text": "不保存的摘录", "_no_save": True},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
-                    ],
-                },
-                {"role": "tool", "content": "工具返回"},
-            ],
-        )
-        text = image_turn_reminder(req)
-        self.assertIn("今天上班好累", text)
-        for omitted in ("先歇会儿", "不属于对话", "运行时间", "private-file", "base64", "不保存的摘录", "工具返回"):
-            self.assertNotIn(omitted, text)
-        req.prompt = "看看你刚才说的表情"
-        self.assertIn("先歇会儿", image_turn_reminder(req))
-
-    def test_consecutive_images_keep_last_user_topic_and_stay_bounded(self):
-        history = [{"role": "user", "content": "上班好累"}]
-        for _ in range(8):
-            history.extend([
-                {"role": "user", "content": "[对方发来一张图片或表情包]"},
-                {"role": "assistant", "content": "旧的解说" * 300},
-            ])
-        req = ProviderRequest(conversation=SimpleNamespace(history=json.dumps(history)))
-        text = image_turn_reminder(req)
-        self.assertIn("上班好累", text)
-        payload = json.loads(text.split("\n", 1)[1].rsplit("\n", 1)[0])
-        self.assertEqual(payload["last_user_text"], "上班好累")
-        self.assertLess(len(text), 1700)
-
-    def test_missing_or_malformed_history_still_allows_natural_image_observation(self):
-        for history in ("not JSON", "null", '{}', None):
-            req = ProviderRequest(conversation=SimpleNamespace(history=history))
-            text = image_turn_reminder(req)
-            payload = json.loads(text.split("\n", 1)[1].rsplit("\n", 1)[0])
-            self.assertEqual(
-                payload, {"recent_dialogue": [], "last_user_text": "", "current_text": ""}
+    async def test_consecutive_images_do_not_promote_the_last_text_topic(self):
+        history = [
+            {"role": "user", "content": "快吃午饭了"},
+            {"role": "assistant", "content": "你打算吃什么？"},
+        ]
+        for caption in ("恋人旺铺招租", "猫咪打游戏抓狂", "小狗困得睁不开眼"):
+            req = ProviderRequest(
+                prompt="[对方发来一张图片或表情包]",
+                contexts=copy.deepcopy(history),
+                extra_user_content_parts=[TextPart(text=f"<image_caption>{caption}</image_caption>")],
             )
+            await self.plugin.inject_image_reply_style(self.event(), req)
+            current = await req.assemble_context()
+            self.assertEqual(req.contexts, history)
+            self.assertEqual(str([*req.contexts, current]).count("快吃午饭了"), 1)
+            self.assertEqual(str(current).count(caption), 1)
+            saved = dump_messages_with_checkpoints(bind_checkpoint_messages([current]))
+            self.assertNotIn(IMAGE_TURN_MARKER, str(saved))
+            history.extend([*saved, {"role": "assistant", "content": "固定测试回复"}])
+
+    async def test_text_topic_switch_and_return_keep_history_without_image_hints(self):
+        history = [{"role": "user", "content": "我午饭准备吃面"}]
+        for text in ("我准备睡觉了", "最近想谈恋爱了", "那你呢？", "回到刚才午饭那个事"):
+            req = ProviderRequest(prompt=text, contexts=copy.deepcopy(history), system_prompt="原有人格")
+            await self.plugin.inject_image_reply_style(self.event([Plain(text)]), req)
+            self.assertEqual(req.contexts, history)
+            self.assertEqual(req.system_prompt, "原有人格")
+            self.assertEqual(req.extra_user_content_parts, [])
+            current = await req.assemble_context()
+            self.assertEqual(str(current).count(text), 1)
+            saved = dump_messages_with_checkpoints(bind_checkpoint_messages([current]))
+            history.extend([*saved, {"role": "assistant", "content": "固定测试回复"}])
 
 
 if __name__ == "__main__":

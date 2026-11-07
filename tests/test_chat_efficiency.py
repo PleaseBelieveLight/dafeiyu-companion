@@ -106,6 +106,20 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         self.provider.text_chat.assert_awaited_once()
         self.assertLess(policy.estimate_input(result), policy.estimate_input(payload))
 
+    async def test_topic_switch_and_return_keep_history_and_reuse_the_existing_summary(self):
+        payload = self.payload()
+        payload["messages"].append({"role": "user", "content": ""})
+        for current in ("我准备睡觉了", "最近想谈恋爱了", "那你呢？", "回到刚才吃饭那个事"):
+            payload["messages"][-1]["content"] = current
+            original = copy.deepcopy(payload)
+            result, _ = await self.prepare(payload)
+            self.assertEqual(payload, original)
+            self.assertEqual(result["messages"][-9:], payload["messages"][-9:])
+            self.assertEqual(str(result["messages"]).count(current), 1)
+            self.assertTrue(result["messages"][1]["content"].startswith("【较早对话摘要】"))
+            self.assertIn("用户已经吃饭，周五有约定。", result["messages"][1]["content"])
+        self.provider.text_chat.assert_awaited_once()
+
     async def test_background_summary_leaves_first_reply_unblocked_and_reuses_valid_result(self):
         self.provider.provider_config["companion_context"]["summary_background"] = True
         entered, release = asyncio.Event(), asyncio.Event()
