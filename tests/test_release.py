@@ -23,7 +23,7 @@ class ReleaseTests(unittest.TestCase):
         self.git("init", "--quiet")
         self.git("config", "core.autocrlf", "false")
         self.files = {
-            ".gitignore": b"/config/settings.json\n/run/\n/dist/\n",
+            ".gitignore": b"/config/settings.json\n/run/\n/dist/\n/.local/\n",
             "AGENTS.md": b"# Repository Guidelines\n",
             "README.md": "# 大肥鱼\n".encode(),
             "config/settings.example.json": b"{}\n",
@@ -73,6 +73,9 @@ class ReleaseTests(unittest.TestCase):
         self.write("docs/local-notes.md", b"untracked notes")
         self.write("config/settings.json", b'{"private": "local value"}')
         self.write("run/private.txt", b"local runtime")
+        self.write(".local/config/settings.json", b'{"private": "local runtime"}')
+        self.write(".local/astrbot/data/private.db", b"private database")
+        self.git("check-ignore", "--quiet", ".local/config/settings.json")
         self.write("tools/local.py", b"untracked helper")
         archive = self.build()
         with zipfile.ZipFile(archive) as bundle:

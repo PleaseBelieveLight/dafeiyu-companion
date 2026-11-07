@@ -17,11 +17,11 @@ import workspace
 
 
 class WorkspaceTests(unittest.TestCase):
-    def test_default_runtime_is_a_sibling_and_does_not_depend_on_working_directory(self):
+    def test_default_runtime_is_local_and_does_not_depend_on_working_directory(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "private-project"
             with patch.object(workspace, "SOURCE_ROOT", source), patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(workspace.runtime_root(), (Path(folder) / "Dafeiyu").resolve())
+                self.assertEqual(workspace.runtime_root(), (source / ".local").resolve())
 
     def test_custom_runtime_is_resolved_relative_to_the_project(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -31,15 +31,37 @@ class WorkspaceTests(unittest.TestCase):
             ):
                 self.assertEqual(workspace.runtime_root(), (Path(folder) / "custom-runtime").resolve())
 
-    def test_runtime_cannot_contain_or_be_inside_source(self):
+    def test_runtime_can_use_local_children_or_an_absolute_external_path(self):
         source = workspace.SOURCE_ROOT
-        for target in (source, source / "cache", source.parent):
+        for target in (source / ".local", source / ".local/custom", source.parent / "custom"):
+            with self.subTest(target=target), patch.dict(
+                os.environ, {"DAFEIYU_RUNTIME_ROOT": str(target)}
+            ):
+                self.assertEqual(workspace.runtime_root(), target.resolve())
+
+    def test_runtime_cannot_contain_source_or_overlap_public_source_paths(self):
+        source = workspace.SOURCE_ROOT
+        for target in (source, source / "cache", source / "tools", source.parent,
+                       source / ".local/..", source / ".local/../plugins"):
             with self.subTest(target=target), patch.dict(
                 os.environ, {"DAFEIYU_RUNTIME_ROOT": str(target)}
             ), self.assertRaises(ValueError):
                 workspace.runtime_root()
 
-    def test_launch_reads_code_from_project_and_interpreter_from_cache(self):
+    def test_local_runtime_redirected_into_source_is_rejected(self):
+        source = workspace.SOURCE_ROOT
+        resolve = Path.resolve
+
+        def redirected(path, *args, **kwargs):
+            if path == source / ".local":
+                return source / "plugins"
+            return resolve(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", redirected), patch.dict(os.environ, {}, clear=True), \
+            self.assertRaises(ValueError):
+            workspace.runtime_root()
+
+    def test_launch_reads_code_from_project_and_interpreter_from_runtime(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime = Path(folder)
             python = runtime / "runtime/astrbot/Scripts/python.exe"
@@ -58,6 +80,18 @@ class WorkspaceTests(unittest.TestCase):
             launch, "RUNTIME_ROOT", Path(folder)
         ), self.assertRaises(RuntimeError):
             launch.command("start", [])
+
+    def test_legacy_runtime_prompts_migration_instead_of_a_fresh_install(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "project"
+            settings = Path(folder) / "Dafeiyu/config/settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("{}", encoding="utf-8")
+            with patch.object(launch, "SOURCE_ROOT", source), \
+                patch.object(launch, "RUNTIME_ROOT", source / ".local"), \
+                self.assertRaisesRegex(RuntimeError, "Migrate"):
+                launch.command("start", [])
+            self.assertFalse((source / ".local").exists())
 
     def test_mcp_migration_preserves_other_servers_and_options(self):
         config = {"mcpServers": {

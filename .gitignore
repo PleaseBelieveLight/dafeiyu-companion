@@ -9,6 +9,7 @@
 !/.env.example
 
 # Downloaded upstream applications and per-machine environments
+/.local/
 /astrbot/
 /napcat/
 /phone/

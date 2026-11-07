@@ -14,7 +14,9 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT, SOURCE_ROOT, TOOLS, runtime_env
+from workspace import (
+    DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT, SOURCE_ROOT, TOOLS, resolve_runtime_root, runtime_env,
+)
 
 SOURCE = SOURCE_ROOT
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -332,9 +334,15 @@ def install(args) -> None:
     """Assemble dependencies, runtime environments and an empty user configuration."""
     if os.name != "nt" or sys.version_info[:2] != (3, 12):
         raise RuntimeError("Use Windows x64 with Python 3.12")
-    target = args.root.resolve()
-    if target == SOURCE or SOURCE in target.parents or target in SOURCE.parents:
-        raise RuntimeError("Keep the runtime directory separate from the source repository")
+    target = resolve_runtime_root(args.root)
+    legacy = SOURCE.parent / "Dafeiyu"
+    if target == SOURCE / ".local" and not (target / "config/settings.json").is_file() and (
+        legacy / "config/settings.json"
+    ).is_file():
+        raise RuntimeError(
+            "An existing sibling Dafeiyu runtime was found. Migrate it to .local first, "
+            "or set DAFEIYU_RUNTIME_ROOT to its location; do not install a second copy."
+        )
     if (
         target.exists()
         and any(target.iterdir())

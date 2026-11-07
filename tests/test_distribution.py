@@ -3,14 +3,17 @@
 import json
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import check_release
 import install
+import workspace
 
 
 class DistributionTests(unittest.TestCase):
@@ -75,6 +78,44 @@ class DistributionTests(unittest.TestCase):
         for field in check_release.SECRET_FIELDS:
             self.assertFalse(settings.get(field))
         self.assertEqual(settings["emulator_serial"], "emulator-5556")
+
+    def test_installer_stages_the_local_runtime_without_touching_sources(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "project"
+            source.mkdir()
+            (source / "dependencies.lock.json").write_text('{"artifacts": []}', encoding="utf-8")
+            (source / "config").mkdir()
+            (source / "config/settings.example.json").write_text("{}", encoding="utf-8")
+            args = types.SimpleNamespace(root=source / ".local", stage_only=True)
+            with patch.object(workspace, "SOURCE_ROOT", source), \
+                patch.object(install, "SOURCE", source), \
+                patch.object(install, "os", types.SimpleNamespace(name="nt")), \
+                patch.object(install.sys, "version_info", (3, 12)), \
+                patch.object(install, "find_program", return_value=None), \
+                patch.object(install, "apply_overlays") as overlays:
+                install.install(args)
+            overlays.assert_called_once_with(source / ".local")
+            self.assertEqual(json.loads((source / ".local/config/settings.json").read_text()), {})
+            self.assertFalse((source / "run").exists())
+
+    def test_installer_requires_migration_when_a_legacy_runtime_exists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "project"
+            settings = Path(folder) / "Dafeiyu/config/settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("{}", encoding="utf-8")
+            args = types.SimpleNamespace(root=source / ".local")
+            for existing_empty_directory in (False, True):
+                if existing_empty_directory:
+                    args.root.mkdir(parents=True)
+                with self.subTest(existing_empty_directory=existing_empty_directory), \
+                    patch.object(workspace, "SOURCE_ROOT", source), \
+                    patch.object(install, "SOURCE", source), \
+                    patch.object(install, "os", types.SimpleNamespace(name="nt")), \
+                    patch.object(install.sys, "version_info", (3, 12)), \
+                    self.assertRaisesRegex(RuntimeError, "Migrate"):
+                    install.install(args)
+                self.assertFalse((source / ".local/config/settings.json").exists())
 
 
 if __name__ == "__main__":

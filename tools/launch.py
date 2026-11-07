@@ -1,4 +1,4 @@
-"""Launch project tools using dependencies from the separate local runtime."""
+"""Launch project tools using dependencies from the private local runtime."""
 
 import os
 import subprocess
@@ -23,6 +23,12 @@ def command(action: str, args: list[str]) -> list[str]:
     }
     python = RUNTIME_ROOT / "runtime/astrbot/Scripts/python.exe"
     if not python.is_file():
+        legacy = SOURCE_ROOT.parent / "Dafeiyu"
+        if RUNTIME_ROOT == SOURCE_ROOT / ".local" and (legacy / "config/settings.json").is_file():
+            raise RuntimeError(
+                "An existing sibling Dafeiyu runtime was found. Migrate it to .local, "
+                "or set DAFEIYU_RUNTIME_ROOT to its location. See scripts/README.md."
+            )
         raise RuntimeError(f"Run scripts/安装配置/安装.cmd first. Runtime not found: {RUNTIME_ROOT}")
     if action in scripts:
         return [str(python), str(TOOLS / scripts[action]), *args]

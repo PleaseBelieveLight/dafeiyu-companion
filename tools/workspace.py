@@ -1,4 +1,4 @@
-"""Keep editable project files separate from the local deployment and its data."""
+"""Resolve private local deployment paths without mixing them with editable code."""
 
 import os
 from pathlib import Path
@@ -8,16 +8,25 @@ TOOLS = SOURCE_ROOT / "tools"
 DAFEIYU_BASE_REFERENCE = "files/persona_config/persona_ref_image/dafeiyu.png"
 
 
-def runtime_root() -> Path:
-    """Resolve the sibling runtime directory, independently of the working directory."""
-    configured = os.environ.get("DAFEIYU_RUNTIME_ROOT")
-    path = Path(configured).expanduser() if configured else SOURCE_ROOT.parent / "Dafeiyu"
+def resolve_runtime_root(path: str | Path) -> Path:
+    """Allow external runtimes or the ignored .local tree, never public source paths."""
+    source = SOURCE_ROOT.resolve()
+    path = Path(path).expanduser()
     if not path.is_absolute():
-        path = SOURCE_ROOT / path
+        path = source / path
     path = path.resolve()
-    if path == SOURCE_ROOT or path in SOURCE_ROOT.parents or SOURCE_ROOT in path.parents:
-        raise ValueError("The runtime directory must be separate from the source repository")
+    if (
+        path == source
+        or path in source.parents
+        or (source in path.parents and not path.is_relative_to(source / ".local"))
+    ):
+        raise ValueError("Use .local inside the project or a separate external runtime directory")
     return path
+
+
+def runtime_root() -> Path:
+    """Resolve the local runtime independently of the working directory."""
+    return resolve_runtime_root(os.environ.get("DAFEIYU_RUNTIME_ROOT") or ".local")
 
 
 RUNTIME_ROOT = runtime_root()

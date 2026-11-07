@@ -1,7 +1,8 @@
 ## Workspace
 
 - Target Windows 10/11 x64 and Python 3.12. Resolve paths through `tools/workspace.py` and respect
-  `DAFEIYU_RUNTIME_ROOT`; keep the runtime separate from the source repository.
+  `DAFEIYU_RUNTIME_ROOT`. Default to the Git-ignored `.local/` directory; custom runtimes may
+  live outside the repository. Never mix runtime data with public source directories.
 - Make persistent changes in this repository, including `plugins/` and `overlays/`.
   Deploy with `scripts/维护/部署更新.cmd`. External upstream checkouts are optional references.
 - Keep credentials, QQ identities, runtime data, backups, generated dependencies, and IDE settings
@@ -17,6 +18,13 @@
   entries at the root; group other scripts under `scripts/`. Do not generate runtime CMD copies.
 - Preserve dependency hashes and third-party attribution. Update the source release allowlist in
   `tools/check_release.py` when adding public root files or directories.
+- When adding a feature or making a substantial behavior or workflow change, update request
+  tracing and diagnostic events in the same change. Cover new model-call entry points and key
+  processing, tool, delivery, and failure stages; label their sources and retain correlation IDs
+  across asynchronous tasks so the new flow can be traced during troubleshooting.
+- Keep source/event labels, readable HTML views, relevant regression checks, and the owning
+  [debugging guide](docs/调试记录.md) aligned with logging changes. Reuse the existing recorder,
+  preserve its default-off switch and privacy boundaries, and keep records concise and readable.
 
 ## Documentation
 
