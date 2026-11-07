@@ -7,6 +7,16 @@ from datetime import datetime, timedelta, timezone
 
 
 SHANGHAI = timezone(timedelta(hours=8), "Asia/Shanghai")
+_ACTION_REQUEST = re.compile(
+    r"(?:请|麻烦|你|大肥鱼|肥鱼|给我|给大家|帮我|来|再|先|快|能不能|"
+    r"让我看看|让我看|我想看看|我要看看|我想看|我要看|想看看|想看|看看|"
+    r"发给我|拍给我|发|拍|一张|张|，|,|\s){0,10}"
+    r"(?P<action>跳(?:个|支|段|一段|一下|一支|一小段)?舞|"
+    r"转(?:个|一|一小)?圈|摆(?:个|一个)?姿势)"
+    r"(?:的?(?:样子|照片|图片|舞姿|图))?"
+    r"(?:来|给我|看|看看|一下|吧|呀|啊|哦|呗|好不好|可以吗|好吗|行吗|嘛|"
+    r"[。！!？，?,~～\s]){0,10}"
+)
 SELFIE_PLANNER_INSTRUCTIONS = (
     "你是角色自拍的内部意图与场景规划器，不直接回复用户，不调用工具。"
     '只返回 JSON：{"generate":true或false,"action":"完整中文生图描述"}。'
@@ -26,6 +36,13 @@ SELFIE_PLANNER_INSTRUCTIONS = (
     "action写人物动作、服装、表情、地点、光线、构图；保留用户具体要求。"
     "人物外貌和画风由角色参考图提供。最多约250字，不写回复台词、进度、工具名或JSON说明。"
 )
+
+
+def requested_action(message: str) -> str:
+    """Recognize requests to show this character, excluding discussion and video-only asks."""
+    text = re.sub(r"^(?:\[[^\[\]\n]{1,70}\]\s*)+", "", str(message or "")).strip()
+    match = _ACTION_REQUEST.fullmatch(text)
+    return match.group("action") if match else ""
 
 
 def selfie_request_kind(message: str) -> str:

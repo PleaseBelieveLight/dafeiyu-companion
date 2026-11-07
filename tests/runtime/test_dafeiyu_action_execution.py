@@ -197,6 +197,10 @@ class ActionExecutionTests(unittest.IsolatedAsyncioTestCase):
             "你会跳舞吗",
             "只给我视频，不要图片",
             "帮我画一只正在跳舞的猫",
+            "我要看她跳舞的样子",
+            "你跳舞的样子很可爱",
+            "我要看你跳舞的视频",
+            "我要看你跳舞的样子，不要发图",
         ]:
             with self.subTest(message=message):
                 values, omni, manager, request = action_fixture()
@@ -219,6 +223,10 @@ class ActionExecutionTests(unittest.IsolatedAsyncioTestCase):
             "[主人] 给我跳个舞看看",
             "大肥鱼来转一圈给我看",
             "摆个姿势",
+            "我要看你跳舞的样子",
+            "跳舞的图片",
+            "给我发张你跳舞的照片",
+            "[主人的朋友 测试昵称(1000001)] 让我看看你转圈的样子",
         ]:
             with self.subTest(message=message):
                 values, omni, _, request = action_fixture()

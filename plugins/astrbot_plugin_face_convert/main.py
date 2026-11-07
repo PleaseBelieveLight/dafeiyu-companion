@@ -45,6 +45,7 @@ from astrbot.core.utils.selfie_intent import (
     fallback_selfie_action,
     parse_selfie_plan,
     recent_selfie_dialogue,
+    requested_action,
     selfie_request_kind,
 )
 from astrbot.core.utils.voice_reply import (
@@ -971,7 +972,7 @@ class FaceConvertPlugin(Star):
         media_names = []
         selfie_followup = event.get_extra("_fy_selfie_followup") is True
         plain = re.sub(r"^(?:\[[^\]\n]{1,60}\]\s*)+", "", message).strip()
-        action = self.ACTION_REQUEST_RE.fullmatch(plain) is not None
+        action = bool(requested_action(message))
         requested_media = {
             "generate_selfie": bool(selfie_request_kind(plain)) or action,
             "generate_image": action or bool(re.search(r"画(?:一|个|张)|生成.{0,6}(?:图|照片)|生图", plain)),
@@ -1170,15 +1171,6 @@ class FaceConvertPlugin(Star):
         logger.info("Requested contextual selfie sent: %s", outcome["sent"])
         return decision["note"]
 
-    ACTION_REQUEST_RE = re.compile(
-        r"(?:请|麻烦|你|大肥鱼|肥鱼|给我|给大家|帮我|来|再|先|快|能不能|"
-        r"让我看看|让我看|我想看|我要看|，|,|\s){0,10}"
-        r"(?P<action>跳(?:个|支|段|一段|一下|一支|一小段)?舞|"
-        r"转(?:个|一|一小)?圈|摆(?:个|一个)?姿势)"
-        r"(?:来|给我|看|看看|一下|吧|呀|啊|哦|呗|好不好|可以吗|好吗|行吗|嘛|"
-        r"[。！!？，?,~～\s]){0,10}"
-    )
-
     async def send_requested_action_picture(self, event, req, media_names) -> str:
         """Execute one explicit action request through the guarded selfie tool.
 
@@ -1199,11 +1191,8 @@ class FaceConvertPlugin(Star):
             or "generate_selfie" not in media_names
         ):
             return ""
-        message = re.sub(
-            r"^(?:\[[^\[\]\n]{1,20}\]\s*)+", "", event.get_message_str() or ""
-        ).strip()
-        match = self.ACTION_REQUEST_RE.fullmatch(message)
-        if match is None:
+        action = requested_action(event.get_message_str())
+        if not action:
             return ""
         tool = (
             self.context.get_llm_tool_manager()
@@ -1212,7 +1201,6 @@ class FaceConvertPlugin(Star):
         )
         if tool is None or not tool.active:
             return ""
-        action = match.group("action")
         failure_text = "图片这次没生成成功，暂时没法给你看。"
         outcome = {
             "sent": False,
