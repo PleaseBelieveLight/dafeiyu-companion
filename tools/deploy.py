@@ -10,7 +10,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS, runtime_env
+from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS, runtime_env
 
 
 def update_admin_config(path: Path) -> None:
@@ -67,7 +67,7 @@ def managed_paths() -> list[Path]:
     paths.extend((ROOT / "astrbot/tests").glob("test_*.py"))
     media_data = ROOT / "astrbot/data/plugin_data/astrbot_plugin_omnidraw"
     paths.extend((media_data / "selfie_references").glob("*"))
-    paths.append(media_data / "files/persona_config/persona_ref_image/dafeiyu.png")
+    paths.append(media_data / DAFEIYU_BASE_REFERENCE)
     paths.extend([
         ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/sender.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/downloader.py",

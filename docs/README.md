@@ -11,7 +11,7 @@
 
 ## 维护
 
-- [仓库协作规范（中文核对版）](AGENTS.zh-CN.md) · 代码、文档与验收规则
+- [仓库协作规范](../AGENTS.md) · 代码、文档与验收规则
 - [自动发布](自动发布.md) · 标签、源码包与失败重试
 - [运行资料清单](../content/README.md) · 人格、知识源与验收素材的读取方式
-- [第三方来源与许可](../THIRD_PARTY_NOTICES.md) · [许可证](../LICENSES/) · [素材署名](../assets/ATTRIBUTION.md) · [自拍参考图](../assets/selfie-references/README.md)
+- [第三方来源与许可](../THIRD_PARTY_NOTICES.md) · [许可证](../LICENSES/) · [角色素材与自拍参考图](../assets/README.md)

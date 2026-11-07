@@ -18,6 +18,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from install import install_character_assets
 from workspace import RUNTIME_ROOT, SOURCE_ROOT
 from patch_chat_boundaries import MEMORY_SCOPE, PATCHED_PATHS, apply_chat_boundaries
 from patch_chat_efficiency import apply_chat_efficiency, apply_memory_recall_focus
@@ -139,8 +140,7 @@ def main(argv=None):
         source = reference_source(stage, commit) if commit else SOURCE_ROOT
         os.environ["ASTRBOT_ROOT"] = str(stage)
         logging.disable(logging.CRITICAL)
-        shutil.copytree(SOURCE_ROOT / "assets/selfie-references",
-                        stage / "data/plugin_data/astrbot_plugin_omnidraw/selfie_references")
+        install_character_assets(stage / "data/plugin_data/astrbot_plugin_omnidraw")
         ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".git")
         staged_package = stage / "astrbot/astrbot"
         shutil.copytree(runtime / "astrbot", staged_package, ignore=ignore)

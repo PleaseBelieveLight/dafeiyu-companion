@@ -14,7 +14,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from workspace import RUNTIME_ROOT, SOURCE_ROOT, TOOLS, runtime_env
+from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT, SOURCE_ROOT, TOOLS, runtime_env
 
 SOURCE = SOURCE_ROOT
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -164,6 +164,15 @@ def copy_project_plugins(target: Path) -> None:
             )
 
 
+def install_character_assets(data_dir: Path) -> None:
+    """Copy the bundled reference images into the drawing plugin's data directory."""
+    assets = SOURCE / "assets/character"
+    reference = data_dir / DAFEIYU_BASE_REFERENCE
+    reference.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(assets / "base.png", reference)
+    shutil.copytree(assets / "scenes", data_dir / "selfie_references", dirs_exist_ok=True)
+
+
 def apply_overlays(target: Path) -> None:
     """Apply local public patches and install project-owned plugins."""
     for folder in ["astrbot", "phone"]:
@@ -240,17 +249,7 @@ def apply_overlays(target: Path) -> None:
         ),
         encoding="utf-8",
     )
-    reference = (
-        target
-        / "astrbot/data/plugin_data/astrbot_plugin_omnidraw/files/persona_config/persona_ref_image/dafeiyu.png"
-    )
-    reference.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SOURCE / "assets/selfie-reference.png", reference)
-    shutil.copytree(
-        SOURCE / "assets/selfie-references",
-        target / "astrbot/data/plugin_data/astrbot_plugin_omnidraw/selfie_references",
-        dirs_exist_ok=True,
-    )
+    install_character_assets(target / "astrbot/data/plugin_data/astrbot_plugin_omnidraw")
 
 
 def install_environments(target: Path) -> None:

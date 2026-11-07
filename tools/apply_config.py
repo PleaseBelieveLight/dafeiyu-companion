@@ -6,7 +6,7 @@ import os
 import secrets
 import sys
 
-from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
+from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
 from patch_chat_efficiency import CHAT_MODALITIES
 
 ASTRO = ROOT / "astrbot"
@@ -385,20 +385,19 @@ def apply():
             ]
             values["router_config"].update({"chain_text2img": "draw", "chain_selfie": "selfie"})
             prompt = "蓝色鲸鱼娘，大肥鱼，蓝色长发，蓝色眼睛，可爱的二次元少女，保持参考图中的角色外貌和服装风格。"
-            ref = str(SOURCE_ROOT / "assets/selfie-reference.png")
             values["persona_config"].update(
                 {
                     "active_persona_id": "dafeiyu",
                     "persona_name": "大肥鱼",
                     "persona_base_prompt": prompt,
-                    "persona_ref_image": ["files/persona_config/persona_ref_image/dafeiyu.png"],
+                    "persona_ref_image": [DAFEIYU_BASE_REFERENCE],
                     "profiles": [
                         {
                             "__template_key": "persona",
                             "id": "dafeiyu",
                             "persona_name": "大肥鱼",
                             "persona_base_prompt": prompt,
-                            "persona_ref_image": [ref],
+                            "persona_ref_image": [DAFEIYU_BASE_REFERENCE],
                         }
                     ],
                 }

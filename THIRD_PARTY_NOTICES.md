@@ -22,15 +22,12 @@
 | Android platform-tools | https://developer.android.com/tools/releases/platform-tools                               | 安装时从 Google 下载，保留包内许可                                                                    |
 | ADBKeyboard            | https://github.com/senzhk/ADBKeyBoard                                                     | 安装时下载固定提交 APK；用户主动运行准备脚本后才装到专用模拟器                                        |
 
-## 默认人物参考图
-
-`assets/selfie-reference.png` 来自大肥鱼原项目的 v2 状态立绘，原作者 **Sutera-Diffusus**
-，上游 https://github.com/Sutera-Diffusus/dsh-whale-musume （MIT）。请保留作者、来源与
-`assets/ATTRIBUTION.md`。未包含本地使用者聊天中的私有图片。
-
-`assets/selfie-references/` 的 18 张场景参考图原样来自大肥鱼原项目
-`assets/avatars/v3-20261025/`。上游标注为用户提供的 ChatGPT 生成图 （2026-10-20 与 2026-10-25 两批），随
-MIT 来源项目分发。来源与映射见该目录 README。
-
 新增整合代码与 AstrBot 兼容修改按根目录 AGPL-3.0-or-later
 提供；不同组件各自的许可不因整合而被替换。上游仅在元数据声明许可或未附独立许可文件的，以该上游仓库的实际声明为准。
+
+## 角色素材
+
+当前随仓库提供的人物形象由项目作者自行设计。[角色素材说明](assets/README.md)
+
+旧版使用过 Sutera-Diffusus 的状态立绘和大肥鱼原项目的 18 张场景参考图，均随各自来源项目的 MIT 许可分发。
+旧版素材继续适用其原有许可与署名要求。[Sutera-Diffusus/dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume) · [大肥鱼原项目](https://github.com/whyever77/dafeiyu-astrbot)
