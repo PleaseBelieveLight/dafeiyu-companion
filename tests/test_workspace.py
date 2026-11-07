@@ -84,13 +84,16 @@ class WorkspaceTests(unittest.TestCase):
     def test_legacy_runtime_prompts_migration_instead_of_a_fresh_install(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "project"
+            source.mkdir()
             settings = Path(folder) / "Dafeiyu/config/settings.json"
             settings.parent.mkdir(parents=True)
             settings.write_text("{}", encoding="utf-8")
-            with patch.object(launch, "SOURCE_ROOT", source), \
-                patch.object(launch, "RUNTIME_ROOT", source / ".local"), \
-                self.assertRaisesRegex(RuntimeError, "Migrate"):
-                launch.command("start", [])
+            for source_path in (source, source / ".." / "project"):
+                with self.subTest(source=source_path), \
+                    patch.object(launch, "SOURCE_ROOT", source_path), \
+                    patch.object(launch, "RUNTIME_ROOT", (source_path / ".local").resolve()), \
+                    self.assertRaisesRegex(RuntimeError, "Migrate"):
+                    launch.command("start", [])
             self.assertFalse((source / ".local").exists())
 
     def test_mcp_migration_preserves_other_servers_and_options(self):

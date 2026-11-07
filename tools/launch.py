@@ -23,8 +23,9 @@ def command(action: str, args: list[str]) -> list[str]:
     }
     python = RUNTIME_ROOT / "runtime/astrbot/Scripts/python.exe"
     if not python.is_file():
-        legacy = SOURCE_ROOT.parent / "Dafeiyu"
-        if RUNTIME_ROOT == SOURCE_ROOT / ".local" and (legacy / "config/settings.json").is_file():
+        source = SOURCE_ROOT.resolve()
+        legacy = source.parent / "Dafeiyu"
+        if RUNTIME_ROOT == source / ".local" and (legacy / "config/settings.json").is_file():
             raise RuntimeError(
                 "An existing sibling Dafeiyu runtime was found. Migrate it to .local, "
                 "or set DAFEIYU_RUNTIME_ROOT to its location. See scripts/README.md."

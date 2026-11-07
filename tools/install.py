@@ -335,8 +335,9 @@ def install(args) -> None:
     if os.name != "nt" or sys.version_info[:2] != (3, 12):
         raise RuntimeError("Use Windows x64 with Python 3.12")
     target = resolve_runtime_root(args.root)
-    legacy = SOURCE.parent / "Dafeiyu"
-    if target == SOURCE / ".local" and not (target / "config/settings.json").is_file() and (
+    source = SOURCE.resolve()
+    legacy = source.parent / "Dafeiyu"
+    if target == source / ".local" and not (target / "config/settings.json").is_file() and (
         legacy / "config/settings.json"
     ).is_file():
         raise RuntimeError(

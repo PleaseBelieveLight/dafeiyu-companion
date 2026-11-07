@@ -94,7 +94,7 @@ class DistributionTests(unittest.TestCase):
                 patch.object(install, "find_program", return_value=None), \
                 patch.object(install, "apply_overlays") as overlays:
                 install.install(args)
-            overlays.assert_called_once_with(source / ".local")
+            overlays.assert_called_once_with((source / ".local").resolve())
             self.assertEqual(json.loads((source / ".local/config/settings.json").read_text()), {})
             self.assertFalse((source / "run").exists())
 
@@ -116,6 +116,23 @@ class DistributionTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "Migrate"):
                     install.install(args)
                 self.assertFalse((source / ".local/config/settings.json").exists())
+
+    def test_installer_detects_legacy_runtime_with_a_source_path_alias(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "project"
+            source.mkdir()
+            source = source / ".." / "project"
+            settings = Path(folder) / "Dafeiyu/config/settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("{}", encoding="utf-8")
+            args = types.SimpleNamespace(root=source / ".local")
+            with patch.object(workspace, "SOURCE_ROOT", source), \
+                patch.object(install, "SOURCE", source), \
+                patch.object(install, "os", types.SimpleNamespace(name="nt")), \
+                patch.object(install.sys, "version_info", (3, 12)), \
+                self.assertRaisesRegex(RuntimeError, "Migrate"):
+                install.install(args)
+            self.assertFalse(args.root.exists())
 
 
 if __name__ == "__main__":
