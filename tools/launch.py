@@ -16,6 +16,7 @@ def command(action: str, args: list[str]) -> list[str]:
         "sync-content": "initialize_api.py",
         "sync-persona": "persona_sync.py",
         "chat-usage": "chat_usage.py",
+        "request-trace": "request_trace_cli.py",
         "verify": "verify_install.py",
         "prepare-model": "prepare_model.py",
         "deploy": "deploy.py",

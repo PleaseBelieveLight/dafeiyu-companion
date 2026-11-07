@@ -28,8 +28,9 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core import file_token_service, sp
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.utils.chat_efficiency import SOURCE
 from astrbot.core.utils.context_parts import chat_turn_preference, set_temporary_context
-from astrbot.core.utils.conversation_turn import advice_declined, current_turn, note_media, wants_video
+from astrbot.core.utils.conversation_turn import advice_declined, current_turn, note_media, note_tool, wants_video
 from astrbot.core.message.components import At, Face, Image, Plain, Record, Reply, Video
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.utils.image_reply import (
@@ -1107,22 +1108,26 @@ class FaceConvertPlugin(Star):
             getter = getattr(self.context, "get_using_provider_async", None)
             provider = await getter(event.unified_msg_origin) if getter else None
             if provider is not None:
-                response = await asyncio.wait_for(
-                    provider.text_chat(
-                        prompt=json.dumps(
-                            {
-                                "current_time": now.isoformat(timespec="minutes"),
-                                "timezone": "Asia/Shanghai",
-                                "request_kind": kind,
-                                "message": message[:1200],
-                                "dialogue": dialogue,
-                            },
-                            ensure_ascii=False,
+                source_token = SOURCE.set("selfie_planner")
+                try:
+                    response = await asyncio.wait_for(
+                        provider.text_chat(
+                            prompt=json.dumps(
+                                {
+                                    "current_time": now.isoformat(timespec="minutes"),
+                                    "timezone": "Asia/Shanghai",
+                                    "request_kind": kind,
+                                    "message": message[:1200],
+                                    "dialogue": dialogue,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            system_prompt=SELFIE_PLANNER_INSTRUCTIONS,
                         ),
-                        system_prompt=SELFIE_PLANNER_INSTRUCTIONS,
-                    ),
-                    timeout=20,
-                )
+                        timeout=20,
+                    )
+                finally:
+                    SOURCE.reset(source_token)
                 planned, scene = parse_selfie_plan(response.completion_text)
                 generate = planned
                 if planned:
@@ -1144,6 +1149,7 @@ class FaceConvertPlugin(Star):
         context = ContextWrapper(
             context=SimpleNamespace(context=self.context, event=event, extra={})
         )
+        note_tool("generate_selfie", "started")
         try:
             result = await asyncio.wait_for(tool.call(context, action=action, count=1), timeout=360)
             result_text = str(result or "")
@@ -1166,6 +1172,7 @@ class FaceConvertPlugin(Star):
         except Exception as exc:
             logger.warning("Requested selfie failed (%s)", type(exc).__name__)
         finally:
+            note_tool("generate_selfie", "finished", "sent" if outcome["sent"] else "not_sent")
             for name in ("generate_selfie", "generate_image"):
                 req.func_tool.remove_tool(name)
         logger.info("Requested contextual selfie sent: %s", outcome["sent"])
@@ -1214,6 +1221,7 @@ class FaceConvertPlugin(Star):
             context=SimpleNamespace(context=self.context, event=event, extra={})
         )
         logger.info("Executing one requested action selfie")
+        note_tool("generate_selfie", "started")
         try:
             result = await asyncio.wait_for(
                 tool.call(
@@ -1237,6 +1245,7 @@ class FaceConvertPlugin(Star):
         except Exception as exc:
             logger.warning("Requested action selfie failed (%s)", type(exc).__name__)
         finally:
+            note_tool("generate_selfie", "finished", "sent" if outcome["sent"] else "not_sent")
             # Prevent a model from charging for a second image or retrying failure.
             for name in ("generate_selfie", "generate_image"):
                 req.func_tool.remove_tool(name)

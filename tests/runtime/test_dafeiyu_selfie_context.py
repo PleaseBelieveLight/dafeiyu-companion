@@ -12,6 +12,7 @@ from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.utils import selfie_context
+from astrbot.core.utils.chat_efficiency import SOURCE, call_source
 from tests.test_dafeiyu_voice_mode import fixture, temporary_text
 
 omni_module = importlib.import_module("data.plugins.astrbot_plugin_omnidraw.main")
@@ -241,6 +242,28 @@ class SelfieContextTests(unittest.IsolatedAsyncioTestCase):
                 await new_face.inject_voice_status(new_event, request)
                 self.assertEqual("白色外套" in temporary_text(request), included)
                 self.assertIn("voice 必须留空", temporary_text(request))
+
+    async def test_caption_source_crosses_task_boundary_and_restores_on_failure(self):
+        response = self.vision.text_chat.return_value
+        for fails in (False, True):
+            sources = []
+
+            async def describe(**kwargs):
+                sources.append(call_source())
+                if fails:
+                    raise TimeoutError("offline vision")
+                return response
+
+            self.vision.text_chat.side_effect = describe
+            token = SOURCE.set("proactive")
+            try:
+                await selfie_context.remember_selfie(
+                    self.face.context, self.event, [self.generated], "靠在窗边", "conversation-a"
+                )
+                self.assertEqual(sources, ["selfie_caption"])
+                self.assertEqual(SOURCE.get(), "proactive")
+            finally:
+                SOURCE.reset(token)
 
     async def test_switching_conversation_during_generation_does_not_inject_old_photo(
         self,

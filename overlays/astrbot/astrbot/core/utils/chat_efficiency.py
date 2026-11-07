@@ -9,15 +9,18 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import importlib.util
 import inspect
 import json
 import logging
 import re
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import closing
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 
 SOURCE = ContextVar("dafeiyu_call_source", default="")
@@ -77,6 +80,12 @@ def call_source():
     try:
         while frame is not None:
             name = frame.f_code.co_filename.replace("\\", "/")
+            if name.endswith("/selfie_context.py"):
+                return "selfie_caption"
+            if name.endswith("/astrbot_plugin_face_convert/main.py") and frame.f_code.co_name == "send_requested_selfie":
+                return "selfie_planner"
+            if name.endswith("/astr_main_agent.py") and frame.f_code.co_name == "_request_img_caption":
+                return "image_caption"
             for fragment, label in (
                 ("astrbot_plugin_livingmemory", "memory"),
                 ("astrbot_plugin_proactive_chat", "proactive"),
@@ -138,14 +147,14 @@ def estimate_input(payload):
     return count
 
 
-def write_usage(provider, payload, started, source, status, usage=None, error="", path=None):
+def write_usage(provider, payload, started, source, status, usage=None, error="", path=None, call_id=None):
     try:
         config = getattr(provider, "provider_config", {})
         values = usage_values(usage)
         with closing(connect(path)) as con, con:
             total = _field(usage, "prompt_tokens")
             con.execute("INSERT INTO calls VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-                uuid.uuid4().hex, started, max(0, time.time() - started), source,
+                call_id or uuid.uuid4().hex, started, max(0, time.time() - started), source,
                 str(config.get("id", ""))[:120], str(payload.get("model", ""))[:120],
                 status, *values, total if type(total) is int else None,
                 estimate_input(payload), len(payload.get("tools", [])), error,
@@ -155,29 +164,69 @@ def write_usage(provider, payload, started, source, status, usage=None, error=""
         logger.warning("[chat_efficiency] 用量记录暂不可用，本次响应仍正常处理。")
 
 
+@lru_cache(maxsize=1)
+def trace_module():
+    """Share one HTTP-hook context across the AstrBot and browser import modes."""
+    name = "_dafeiyu_request_trace"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("request_trace.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+class _NoTrace:
+    def deactivate(self):
+        pass
+
+    async def chunk(self, value):
+        pass
+
+    async def finish(self, **kwargs):
+        pass
+
+
 async def metered_chat_completion(provider, create, *, usage_path=None, source_label=None, **payload):
     """Record each SDK attempt, including streaming usage and uncertain failures."""
     started, source = time.time(), source_label or call_source()
+    call_id = uuid.uuid4().hex
+    turn = None
     if __package__:
-        from .conversation_turn import note_model
+        from .conversation_turn import note_model, trace_context
 
         note_model(source, payload)
+        turn = trace_context()
+    try:
+        trace = trace_module().CallTrace(
+            Path(usage_path or store_path()).parent, create, call_id=call_id, source=source,
+            provider=str(getattr(provider, "provider_config", {}).get("id", "")),
+            model=payload.get("model", ""), stream=payload.get("stream", False), turn=turn,
+        )
+    except Exception as exc:
+        logger.warning("[request_trace] 调试记录暂不可用，正常请求继续 (%s)", type(exc).__name__)
+        trace = _NoTrace()
     try:
         result = await create(**payload)
     except BaseException as exc:
         write_usage(provider, payload, started, source, "unknown_error", error=type(exc).__name__,
-                    path=usage_path)
+                    path=usage_path, call_id=call_id)
+        await trace.finish(error=type(exc).__name__, elapsed=time.time() - started)
         raise
+    finally:
+        trace.deactivate()
     if not payload.get("stream"):
         usage = getattr(result, "usage", None)
         write_usage(provider, payload, started, source,
-                    "returned" if usage is not None else "unknown_usage", usage, path=usage_path)
+                    "returned" if usage is not None else "unknown_usage", usage, path=usage_path, call_id=call_id)
+        await trace.finish(result=result, usage=usage, elapsed=time.time() - started)
         return result
 
     async def chunks():
         usage, complete, error = None, False, ""
         try:
             async for chunk in result:
+                await trace.chunk(chunk)
                 if getattr(chunk, "usage", None) is not None:
                     usage = chunk.usage
                 elif getattr(chunk, "choices", None):
@@ -190,13 +239,14 @@ async def metered_chat_completion(provider, create, *, usage_path=None, source_l
         finally:
             write_usage(provider, payload, started, source,
                         "returned" if complete and usage is not None else "unknown_stream", usage,
-                        error, path=usage_path)
+                        error, path=usage_path, call_id=call_id)
             close = getattr(result, "close", None)
             if close is not None:
                 try:
                     await close()
                 except Exception:
                     pass
+            await trace.finish(usage=usage, error=error, elapsed=time.time() - started, complete=complete)
     return chunks()
 
 

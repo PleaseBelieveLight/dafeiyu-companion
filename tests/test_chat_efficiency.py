@@ -279,7 +279,9 @@ class AccountingTests(unittest.IsolatedAsyncioTestCase):
         client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(
             create=original)), max_retries=2)
         attach_browser_metering(client, self.path)
+        attach_browser_metering(client, self.path)
         await client.chat.completions.create(model="test", messages=[], stream=False)
+        original.assert_awaited_once()
         self.assertEqual(client.max_retries, 0)
         self.assertEqual(self.rows()[0]["source"], "browser")
         aggregate = report(self.path)

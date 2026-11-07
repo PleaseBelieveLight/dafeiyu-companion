@@ -230,7 +230,8 @@ def start_metrics(event):
     data = None
     if event.get_platform_name() == "aiocqhttp":
         data = {"start": time.monotonic(), "llm": 0, "context": set(), "results": set(),
-                "first": None, "media": 0.0, "transport": 0.0, "channels": set(), "kind": ""}
+                "first": None, "media": 0.0, "transport": 0.0, "channels": set(), "kind": "",
+                "trace_turn_id": secrets.token_hex(12)}
     return _TURN.set(data)
 
 
@@ -241,6 +242,32 @@ def activate_metrics(event):
         media = next((label for cls, label in ((Video, "video"), (Record, "voice"), (Image, "image"))
                       if any(isinstance(part, cls) for part in components)), "")
         data["kind"] = media or ("task" if is_action(event.get_message_str() or "") else "text")
+        trace_event("turn.received", {"kind": data["kind"]})
+
+
+def trace_context():
+    data = _TURN.get()
+    return {"turn_id": data.get("trace_turn_id", ""), "kind": data["kind"]} if data else None
+
+
+def trace_event(name, details=None, *, source="qq", data=None):
+    data = _TURN.get() if data is None else data
+    if data is None:
+        return
+    try:
+        from .chat_efficiency import store_path, trace_module
+
+        module = trace_module()
+        base = store_path().parent
+        module.event(base, source, name, turn_id=data.get("trace_turn_id", ""), details=details)
+        if name == "turn.finished" and module.settings(base)["enabled"]:
+            module.refresh_index(base)
+    except Exception:
+        pass
+
+
+def note_tool(name, phase, status=""):
+    trace_event("tool." + phase, {"name": str(name)[:128], "status": status}, source="tool")
 
 
 def note_model(source, payload):
@@ -266,6 +293,7 @@ def note_result(status):
     data = _TURN.get()
     if data is not None:
         data["results"].add(status)
+        trace_event("turn.result", {"status": status})
 
 
 def note_media(duration):
@@ -284,6 +312,7 @@ def note_delivery(chain, duration):
         return
     data["channels"].update(channels)
     data["transport"] += duration
+    trace_event("qq.delivered", {"channels": sorted(channels), "elapsed_ms": round(duration * 1000)})
     if data["first"] is None:
         data["first"] = time.monotonic() - data["start"]
 
@@ -293,6 +322,9 @@ def finish_metrics(event, token):
     _TURN.reset(token)
     if not data or not data["kind"]:
         return
+    trace_event("turn.finished", {"kind": data["kind"], "generation_calls": data["llm"],
+                                 "contexts": sorted(data["context"]), "results": sorted(data["results"]),
+                                 "channels": sorted(data["channels"])}, data=data)
     from .chat_efficiency import connect
 
     try:

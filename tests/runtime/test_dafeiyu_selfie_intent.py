@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from astrbot.core.message.components import Image
+from astrbot.core.utils.chat_efficiency import SOURCE, call_source
 from astrbot.core.utils.selfie_intent import SHANGHAI
 from tests.test_dafeiyu_action_execution import action_fixture, omni_module
 from tests.test_dafeiyu_voice_mode import envelope, face_module, temporary_text
@@ -113,6 +114,28 @@ class SelfieIntentIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await plugin.inject_voice_status(event, request)
         self.assertIn("躺在床上", omni._run_selfie_generation.await_args.args[1])
         self.assertIn("2026-10-29 10:30", temporary_text(request))
+
+    async def test_planner_source_crosses_task_boundary_and_restores_on_failure(self):
+        for fails in (False, True):
+            values, _, _, request, planner = self.build("生成一张自拍图片")
+            plugin, event, _, _, _, _ = values
+            response = planner.text_chat.return_value
+            sources = []
+
+            async def plan(**kwargs):
+                sources.append(call_source())
+                if fails:
+                    raise TimeoutError("offline planner")
+                return response
+
+            planner.text_chat.side_effect = plan
+            token = SOURCE.set("proactive")
+            try:
+                await plugin.inject_voice_status(event, request)
+                self.assertEqual(sources, ["selfie_planner"])
+                self.assertEqual(SOURCE.get(), "proactive")
+            finally:
+                SOURCE.reset(token)
 
     async def test_permission_or_api_failure_never_claims_success_or_retries(self):
         for failure, denied in [(True, False), (False, True)]:

@@ -20,6 +20,8 @@ def usage_module():
 
 def attach_browser_metering(client, path=None):
     """Meter real SDK attempts, with Agent retries replacing hidden SDK retries."""
+    if getattr(client, "_dafeiyu_metered", False):
+        return client
     original = client.chat.completions.create
     path = path or RUNTIME_ROOT / "astrbot/data/plugin_data/dafeiyu_context/context.db"
     provider = SimpleNamespace(provider_config={"id": "browser_deepseek"})
@@ -31,4 +33,5 @@ def attach_browser_metering(client, path=None):
         )
 
     client.chat.completions.create = create
+    client._dafeiyu_metered = True
     return client

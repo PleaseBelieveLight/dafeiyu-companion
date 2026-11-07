@@ -24,6 +24,7 @@
 .\scripts\维护\部署更新.cmd
 python tools/launch.py chat-usage --days 7
 python tools/launch.py sync-persona --apply
+python tools/launch.py request-trace status
 ```
 
 任务完成后保留窗口供查看结果；配置向导、NapCat 成功打开后自动关闭命令窗口。 自动化调用可先设置
@@ -32,4 +33,5 @@ python tools/launch.py sync-persona --apply
 
 `chat-usage` 只读查看已接入聊天模型与浏览器的用量；`sync-persona` 默认预览差异，
 加 `--apply` 才会备份并同步源码人格正文。它保留后台工具、技能与开场配置；
-详细的上下文预算和统计边界见[对话上下文与用量](../docs/Token消耗与对话智能评审.md)。
+`request-trace` 提供完整模型请求与运行事件的开关、查看和导出，首次部署默认关闭。
+使用方式与记录边界见[模型请求与运行调试记录](../docs/调试记录.md)。

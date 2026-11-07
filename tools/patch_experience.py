@@ -127,6 +127,21 @@ def apply_experience(target, *, reverse=False):
          '            note_result(tool.name)\n'
          '        run_context.context.event.clear_result()\n'),
     )
+    patch(target, AGENT_HOOKS,
+        ('        await call_event_hook(\n            run_context.context.event,\n'
+         '            EventType.OnUsingLLMToolEvent,\n',
+         '        from astrbot.core.utils.conversation_turn import note_tool\n\n'
+         '        note_tool(tool.name, "started")\n'
+         '        await call_event_hook(\n            run_context.context.event,\n'
+         '            EventType.OnUsingLLMToolEvent,\n'),
+        ('        await call_event_hook(\n            run_context.context.event,\n'
+         '            EventType.OnLLMToolRespondEvent,\n',
+         '        from astrbot.core.utils.conversation_turn import note_tool\n\n'
+         '        note_tool(tool.name, "finished", "missing" if tool_result is None else\n'
+         '                  "error" if getattr(tool_result, "isError", False) else "returned")\n'
+         '        await call_event_hook(\n            run_context.context.event,\n'
+         '            EventType.OnLLMToolRespondEvent,\n'),
+    )
     if (target / MEMORY_RECALL_PATH).is_file():
         patch(target, MEMORY_RECALL_PATH,
             ('from astrbot.core.utils.context_parts import skip_automatic_recall\n',
