@@ -10,7 +10,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS, runtime_env
+from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS, runtime_env
 
 
 def update_admin_config(path: Path) -> None:
@@ -44,7 +44,14 @@ def preserve_local_programs() -> None:
 
 def managed_paths() -> list[Path]:
     """Identify the installed code and configuration touched by deployment."""
+    from patch_chat_boundaries import MEMORY_SCOPE, PATCHED_PATHS
+    from patch_chat_efficiency import MEMORY_RECALL_PATH
+    from patch_experience import EXPERIENCE_PATHS
+
     paths = []
+    paths.extend(ROOT / relative for relative in PATCHED_PATHS)
+    paths.extend(ROOT / relative for relative in EXPERIENCE_PATHS)
+    paths.append(ROOT / MEMORY_SCOPE)
     for folder in (SOURCE_ROOT / "overlays").iterdir():
         for path in folder.rglob("*"):
             if path.is_file() and "__pycache__" not in path.parts:
@@ -60,13 +67,14 @@ def managed_paths() -> list[Path]:
     paths.extend((ROOT / "astrbot/tests").glob("test_*.py"))
     media_data = ROOT / "astrbot/data/plugin_data/astrbot_plugin_omnidraw"
     paths.extend((media_data / "selfie_references").glob("*"))
-    paths.append(media_data / "files/persona_config/persona_ref_image/dafeiyu.png")
+    paths.append(media_data / DAFEIYU_BASE_REFERENCE)
     paths.extend([
         ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/sender.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_music/core/downloader.py",
         ROOT / "astrbot/data/mcp_server.json",
         ROOT / "astrbot/astrbot/core/provider/func_tool_manager.py",
         ROOT / "astrbot/astrbot/core/provider/sources/openai_source.py",
+        ROOT / MEMORY_RECALL_PATH,
         ROOT / "astrbot/data/cmd_config.json",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/main.py",
         ROOT / "astrbot/data/plugins/astrbot_plugin_omnidraw/pages/插件配置/app.js",

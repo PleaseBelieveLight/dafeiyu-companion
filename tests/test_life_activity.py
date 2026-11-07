@@ -21,7 +21,9 @@ from astrbot_plugin_life_continuity.activity import ActivityEngine, ProcessLease
 from astrbot_plugin_life_continuity.activity_state import (
     ACTIVITY_SCHEMA, SHANGHAI, ActivityLedger, BudgetExceeded, day_at,
 )
+from astrbot_plugin_life_continuity.affect import DOPAMINE_HALF_LIFE, RoleAffect
 from astrbot_plugin_life_continuity.delivery import DeliveryGate, quiet_now
+from astrbot_plugin_life_continuity.followups import Followups
 from astrbot_plugin_life_continuity.native_agent import MeteredProvider
 from astrbot_plugin_life_continuity.state import (
     SCHEMA_VERSION, ConflictError, LifeStore, StateError, read_snapshot,
@@ -74,6 +76,87 @@ class LedgerFixture(unittest.TestCase):
     def finish(self, job, seconds=10):
         self.ledger.finish(job, "test", seconds)
         self.ledger.settle_time(job, seconds)
+
+
+class FollowupTests(LedgerFixture):
+    def test_cross_day_commitment_is_scoped_and_finishes_from_confirmed_owner_text(self):
+        followups = Followups(self.store, self.clock)
+        text = "明天9点问我 交材料"
+        answer = followups.command(SCOPE, "1001", "first", text)
+        self.assertIn("09:00", answer)
+        self.assertEqual(answer, followups.command(SCOPE, "1001", "first", text))
+        self.assertEqual(len(followups.rows(SCOPE, "1001")), 1)
+        self.assertEqual(followups.context(SCOPE, "1001", "今天有点累"), "")
+        self.assertEqual(followups.context(SCOPE, "1002", "交材料"), "")
+        self.assertEqual(followups.context("test:GroupMessage:1001", "1001", "交材料"), "")
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+
+        self.clock.now = datetime(2026, 10, 30, 9, tzinfo=SHANGHAI).timestamp()
+        self.assertEqual(followups.due(SCOPE, "1001")["item"], "交材料")
+        self.assertIn("翻篇", followups.command(SCOPE, "1001", "done", "已经交材料了"))
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+        self.assertIn("已结束", followups.context(SCOPE, "1001", "交材料"))
+        self.assertIn("没有", followups.command(SCOPE, "1001", "list", "记挂事项"))
+
+    def test_restart_preserves_uncertain_followup_and_quiet_preference(self):
+        followups = Followups(self.store, self.clock)
+        followups.command(SCOPE, "1001", "pending", "明天9点问我 交表单")
+        followups.command(SCOPE, "1001", "quiet", "先别主动找我")
+        self.clock.now = datetime(2026, 10, 30, 9, tzinfo=SHANGHAI).timestamp()
+        self.ledger.reserve_delivery(SCOPE, "followup", "followup:pending", "交表单怎么样", self.cfg)
+        self.ledger.recover(SCOPE)
+        with closing(LifeStore(self.folder)) as reopened:
+            restored = Followups(reopened, self.clock)
+            self.assertTrue(restored.muted(SCOPE))
+            self.assertIsNone(restored.due(SCOPE, "1001"))
+            self.assertIn("待核实", restored.context(SCOPE, "1001", "交表单"))
+            restored.command(SCOPE, "1001", "unmute", "可以主动找我了")
+            self.assertFalse(restored.muted(SCOPE))
+            self.assertIsNone(restored.due(SCOPE, "1001"))
+            self.assertIn("没找到", restored.command(SCOPE, "1001", "move", "改期记挂 交表单 | 明天9点"))
+
+    def test_reschedule_keeps_original_commitment_and_stops_old_due_time(self):
+        followups = Followups(self.store, self.clock)
+        followups.command(SCOPE, "1001", "plan", "明天方便时问我面试结果")
+        move = "改期记挂 面试结果 | 明天11点"
+        answer = followups.command(SCOPE, "1001", "move", move)
+        self.assertIn("11:00", answer)
+        self.assertEqual(len(followups.rows(SCOPE, "1001")), 1)
+        self.clock.now = datetime(2026, 10, 30, 9, tzinfo=SHANGHAI).timestamp()
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+        self.assertEqual(followups.command(SCOPE, "1001", "move", move), answer)
+        self.assertIn("11:00", followups.context(SCOPE, "1001", "昨天约好的事是什么"))
+        self.clock.now += 2 * 3600
+        self.assertEqual(followups.due(SCOPE, "1001")["event_id"], "plan")
+        followups.command(SCOPE, "1001", "cancel", "取消记挂 面试结果")
+        self.assertIsNone(followups.due(SCOPE, "1001"))
+
+
+class RoleAffectTests(LedgerFixture):
+    def test_prediction_error_decays_and_affinity_survives_the_day_and_restart(self):
+        affect = RoleAffect(self.store, self.clock)
+        affect.observe(SCOPE, "1001", "praise", "这次做得好。")
+        first = affect.snapshot(SCOPE, "1001")
+        self.assertEqual(first, {"mood": 8.4, "affinity": 0, "dopamine": 17.5})
+        affect.observe(SCOPE, "1001", "praise", "这次做得好。")
+        self.assertEqual(affect.snapshot(SCOPE, "1001"), first)
+        self.clock.now += DOPAMINE_HALF_LIFE
+        self.assertEqual(affect.snapshot(SCOPE, "1001")["dopamine"], 8.75)
+        affect.observe(SCOPE, "1001", "another", "这次帮到我了")
+        self.assertEqual(affect.snapshot(SCOPE, "1001")["dopamine"], 22.75)
+        affect.observe(SCOPE, "1001", "relational", "我喜欢和你聊天")
+        self.clock.now += 86400
+        with closing(LifeStore(self.folder)) as reopened:
+            restored = RoleAffect(reopened, self.clock)
+            before = restored.snapshot(SCOPE, "1001")
+            self.assertEqual(before["affinity"], 6)
+            self.assertEqual(before["dopamine"], 0)
+            restored.observe(SCOPE, "1001", "ambiguous", "我朋友说这次回答不对")
+            self.assertEqual(restored.snapshot(SCOPE, "1001"), before)
+            self.assertEqual(restored.snapshot(SCOPE, "1002")["affinity"], 0)
+            restored.observe(SCOPE, "1001", "correction", "这次回答不对")
+            self.assertLess(restored.snapshot(SCOPE, "1001")["dopamine"], 0)
+            self.assertEqual(restored.snapshot(SCOPE, "1001")["affinity"], 6)
 
 
 class BudgetTests(LedgerFixture):
@@ -151,7 +234,7 @@ class BudgetTests(LedgerFixture):
         self.assertEqual(ledger.recover(SCOPE), 0)
 
     def test_recovery_never_revives_a_cancelled_goal(self):
-        job = self.begin()
+        self.begin()
         self.store.db.execute("UPDATE goals SET status='cancelled' WHERE id=?", (self.goal["id"],))
         self.ledger.recover(SCOPE)
         self.assertEqual(self.store.get_goal(SCOPE, self.goal["id"])["status"], "cancelled")
@@ -352,6 +435,28 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             await self.gate.send(SCOPE, "proactive", "chat:1", "另一条消息", second)
         second.assert_not_called()
         self.assertEqual(self.ledger.snapshot(SCOPE, self.cfg)["shares"], 1)
+
+    async def test_followup_reserves_today_before_research_can_use_its_quota(self):
+        module = load_plugin(self.store.folder)
+        plugin = module.LifeContinuityPlugin(object(), {
+            **self.cfg, "enabled": True, "followups_enabled": True, "owner_scope": SCOPE,
+        })
+        await plugin.initialize()
+        self.addAsyncCleanup(plugin.terminate)
+        await plugin.scheduler.close()
+        plugin.engine.ledger.clock = plugin.followups.clock = self.clock
+        plugin.delivery.policy = lambda: None
+        plugin.dispatch_contact = AsyncMock(return_value="qq-receipt")
+        await plugin.owner_message(FakeEvent("明天9点问我 交材料", event_id="plan"))
+        self.clock.now = datetime(2026, 10, 30, 8, tzinfo=SHANGHAI).timestamp()
+        goal = {"id": "g", "title": "公开资料", "checkpoint": {"note_version": 1}}
+        self.assertFalse(await plugin.share_note(FakeEvent(), None, goal, "有新结果"))
+        plugin.dispatch_contact.assert_not_awaited()
+        self.assertEqual(plugin.engine.ledger.snapshot(SCOPE, plugin.config)["shares"], 0)
+        self.clock.now += 3600
+        self.assertTrue(await plugin.followup_due())
+        self.assertFalse(await plugin.followup_due())
+        plugin.dispatch_contact.assert_awaited_once_with(SCOPE, "来问问约好的事，交材料怎么样了？")
 
     async def test_unknown_send_is_not_retried_by_key_or_content(self):
         first = AsyncMock(side_effect=TimeoutError("lost reply"))
@@ -568,8 +673,10 @@ class ActivityPluginTests(unittest.IsolatedAsyncioTestCase):
             try:
                 plugin.store.close()
                 request = types.SimpleNamespace(system_prompt="正常聊天人格", func_tool=None)
-                await plugin.inject_context(FakeEvent(), request)
+                await plugin.inject_context(FakeEvent("晚上好"), request)
                 self.assertIn("正常聊天人格", request.system_prompt)
+                self.assertEqual(request.extra_user_content_parts, [])
+                await plugin.inject_context(FakeEvent("研究到哪了"), request)
                 self.assertIn("暂不可用", json.dumps(request.extra_user_content_parts, ensure_ascii=False))
             finally:
                 await plugin.terminate()
@@ -596,7 +703,7 @@ class ActivityPluginTests(unittest.IsolatedAsyncioTestCase):
             try:
                 plugin.delivery.policy = lambda: None
                 event = FakeEvent()
-                event.send.return_value = False
+                plugin.dispatch_contact = AsyncMock(return_value=None)
                 goal = {"id": "test-goal", "title": "主题", "checkpoint": {"note_version": 1}}
                 self.assertFalse(await plugin.share_note(event, {}, goal, "笔记"))
                 row = read_snapshot(Path(folder), scope=SCOPE)["life_deliveries"][0]

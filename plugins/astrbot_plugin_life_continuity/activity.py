@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .activity_state import ActivityLedger, limits
 from .native_agent import choose_native, run_native
+from .search import SearchError, search_web
+from .selection_state import fingerprint
 from .state import ConflictError, StateError
 
 
@@ -44,10 +46,12 @@ class ProcessLease:
 
 class ActivityEngine:
     def __init__(self, store, context, config, policy, *, agent=run_native, share=None,
-                 selector=choose_native, clock=time.time, monotonic=time.monotonic):
+                 selector=choose_native, searcher=search_web, clock=time.time,
+                 monotonic=time.monotonic):
         self.store, self.context, self.config, self.policy = store, context, config, policy
         self.agent, self.share, self.monotonic = agent, share, monotonic
         self.selector = selector
+        self.searcher = searcher
         self.ledger, self.lease = ActivityLedger(store, clock), ProcessLease(store.folder)
         self.task, self.work, self.runner, self.job = None, None, None, None
         self.stop_signal, self.reason, self.manual = asyncio.Event(), "", False
@@ -104,7 +108,8 @@ class ActivityEngine:
                 return {"duplicate": True, "run_id": old_run["id"], "status": old_run["status"]}
             candidates = None
             if goal_id is None:
-                candidates = self.ledger.goals.candidates(scope, self.ledger.clock())
+                candidates = self.ledger.goals.candidates(scope, self.ledger.clock(),
+                    allow_empty=self.config.get("web_search_enabled") is True)
                 if not candidates:
                     with self.store.transaction():
                         self.ledger.goals.record_choice(scope, trigger, None, None,
@@ -154,11 +159,17 @@ class ActivityEngine:
                 self.ledger.finish(job, "choice_wait", 0)
                 job["settled"] = True
                 return {"waited": True}
+        if job.get("allow_search"):
+            await self._retrieve(event, job)
         researching = True
         sources = [{"id": row["id"], "kind": row["kind"],
                     "text": row["evidence"]["text"][:2000],
                     "range_chars": [0, min(len(row["evidence"]["text"]), 2000)],
-                    "total_chars": len(row["evidence"]["text"])} for row in job["sources"]]
+                    "total_chars": len(row["evidence"]["text"]),
+                    "source_type": row["evidence"].get("source_type", row["kind"]),
+                    "url": row["evidence"].get("url", ""),
+                    "retrieved_at": row["evidence"].get("retrieved_at")}
+                   for row in job["sources"]]
         job["read_ranges"] = {row["id"]: row["range_chars"] for row in sources}
         previous = self.store.db.execute("""SELECT body,evidence_ids_json FROM notes
             WHERE scope=? AND goal_id=? ORDER BY version DESC LIMIT 1""",
@@ -178,7 +189,10 @@ class ActivityEngine:
             lambda runner: setattr(self, "runner", runner),
         )
         self.permit()
-        body = ("## 资料来源\n" + "\n".join(f"[E:{identity}]" for identity in result["source_ids"])
+        references = {row["id"]: row["evidence"].get("url", "") for row in job["sources"]}
+        body = ("## 资料来源\n" + "\n".join(
+                    f"[E:{identity}] " + references.get(identity, "")
+                    for identity in result["source_ids"])
                 + "\n\n## 我的想法\n" + result["note"]
                 + "\n\n## 待核实\n" + result["questions"])
         updated = self.ledger.finish(
@@ -195,6 +209,54 @@ class ActivityEngine:
             except Exception:
                 pass  # Delivery has its own durable unknown-result ledger.
         return updated
+
+    async def _retrieve(self, event, job):
+        self.permit()
+        timeout = self.config.get("search_timeout_seconds", 15)
+        if type(timeout) is not int or not 1 <= timeout <= 30:
+            raise ValueError("invalid research search timeout")
+        query = (job["goal"]["title"][:100] + " " + job["goal"]["next_step"][:180]).strip()
+        audit = {"status": "running", "query": query, "at": self.ledger.clock()}
+        self.ledger.record_search(job, audit)
+        try:
+            async with asyncio.timeout(timeout):
+                results = await self.searcher(self.context, event, query, timeout)
+            self.permit()
+            existing = self.store.db.execute("""SELECT evidence_json FROM episodes
+                WHERE scope=? AND goal_id=?""", (job["scope"], job["goal_id"]))
+            keys = {fingerprint(json.loads(row[0]).get("text", "")[:2000]) for row in existing}
+            added = []
+            for row in results[:3]:
+                key = fingerprint(row["text"][:2000])
+                if key in keys:
+                    continue
+                keys.add(key)
+                added.append(self.store.record_episode(
+                    job["scope"], job["goal_id"], "web:" + job["goal_id"] + ":" + key,
+                    kind="source", run_id=job["run_id"],
+                    evidence={"source_type": "web_search_snippet", **row,
+                              "retrieved_at": self.ledger.clock(), "query": query},
+                    occurred_at=self.ledger.clock()))
+            audit.update(status="returned", results=len(results), new_sources=len(added))
+            self.ledger.record_search(job, audit)
+            # Prefer retrieved sources while keeping existing unread sources available.
+            sources = added + [row for row in self.ledger.sources(job["scope"], job["goal_id"])
+                               if row["id"] not in {item["id"] for item in added}]
+            seen = self.ledger.goals.seen(job["scope"], job["goal_id"])
+            job["sources"] = [row for row in sources
+                              if fingerprint(row["evidence"]["text"][:2000]) not in seen][:3]
+            if not job["sources"]:
+                raise SearchError("no_new_sources")
+        except asyncio.CancelledError:
+            audit["status"] = "cancelled"
+            self.ledger.record_search(job, audit)
+            raise
+        except Exception as exc:
+            reason = getattr(exc, "reason", "search_timeout" if isinstance(exc, TimeoutError)
+                             else "search_failed")
+            audit.update(status=reason)
+            self.ledger.record_search(job, audit)
+            raise SearchError(reason) from None
 
     def _request_stop(self, reason, manual):
         self.reason, self.manual = reason, self.manual or manual
@@ -243,7 +305,7 @@ class ActivityEngine:
         except asyncio.CancelledError:
             reason = self.reason or "cancelled"
         except Exception as exc:
-            reason = self.reason or type(exc).__name__
+            reason = self.reason or getattr(exc, "reason", type(exc).__name__)
         try:
             if not job.get("settled"):
                 self.ledger.finish(job, reason, self.monotonic() - started, manual=self.manual)

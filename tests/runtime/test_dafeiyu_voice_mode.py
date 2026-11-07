@@ -254,8 +254,8 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
                 True,
                 envelope("", "想起来问问你吃饭了吗？"),
                 False,
-                [],
                 ["想起来问问你吃饭了吗？"],
+                [],
             ),
             (
                 "proactive_fallback",
@@ -375,12 +375,14 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertTrue(extras["_fy_voice_handled"])
 
-    async def test_request_policy_respects_normal_switch_and_proactive_exception(self):
+    async def test_request_policy_respects_session_switch_and_proactive_opt_in(self):
         cases = [
             ({"tts_enabled": True}, False, True, "根据上下文选择"),
             ({"tts_enabled": False}, False, True, "本次不允许语音"),
             ({}, False, True, "本次不允许语音"),
-            ({"tts_enabled": False}, True, True, "独立允许语音"),
+            ({"tts_enabled": False}, True, True, "本次不允许语音"),
+            ({"tts_enabled": True}, True, True, "独立允许语音"),
+            ({"tts_enabled": True, "fy_voice_quiet": True}, True, True, "本次不允许语音"),
             ({"tts_enabled": True}, True, False, "本次不允许语音"),
         ]
         for session, proactive, proactive_tts, expected in cases:
@@ -410,7 +412,7 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_proactive_sender_delegates_synthesis_once(self):
         raw = envelope("歌名：晴天", "吃过饭就休息会儿吧。")
         plugin, event, result, provider, extras, _ = fixture(
-            raw, {"tts_enabled": False}, True
+            raw, {"tts_enabled": True}, True
         )
         host = SimpleNamespace(
             config_service=SimpleNamespace(
@@ -438,7 +440,7 @@ class ContextualVoiceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 face_module.sp,
                 "get_async",
-                new=AsyncMock(return_value={"tts_enabled": False}),
+                new=AsyncMock(return_value={"tts_enabled": True}),
             ),
             patch.object(
                 sender_module, "dispatch_event_hook", new=AsyncMock(return_value=False)

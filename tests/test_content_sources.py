@@ -80,6 +80,9 @@ class ContentSourceTests(unittest.TestCase):
         self.assertFalse((self.source / "docs").exists())
 
     def test_acceptance_prepare_reads_content_without_docs(self):
+        relative = Path("content/research.txt")
+        text = "预算、停止与恢复的研究素材。\n" * 200
+        (self.source / relative).write_text(text, encoding="utf-8")
         dashboard = Mock()
         dashboard.login.return_value = dashboard
         dashboard.trial.return_value = {}
@@ -88,13 +91,46 @@ class ContentSourceTests(unittest.TestCase):
             patch.object(life_trial, "Dashboard", return_value=dashboard),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(life_trial.main(["prepare"]), 0)
+            self.assertEqual(life_trial.main(["prepare", "--source-file", str(relative)]), 0)
         args, kwargs = dashboard.trial.call_args
         self.assertEqual(args, ("prepare",))
-        self.assertEqual(kwargs["source_name"], str(Path("content/自主生活验收资料.md")))
-        self.assertEqual(kwargs["source_text"],
-                         (self.source / kwargs["source_name"]).read_text(encoding="utf-8")[:2000])
+        self.assertEqual(kwargs["source_name"], str(relative))
+        self.assertEqual(kwargs["source_text"], text[:2000])
         self.assertFalse((self.source / "docs").exists())
+
+    def test_acceptance_prepare_accepts_an_external_utf8_source(self):
+        path = self.source.parent / "研究资料.txt"
+        path.write_text("预算、停止与恢复", encoding="utf-8-sig")
+        dashboard = Mock()
+        dashboard.login.return_value = dashboard
+        dashboard.trial.return_value = {}
+        with (
+            patch.object(life_trial, "SOURCE_ROOT", self.source),
+            patch.object(life_trial, "Dashboard", return_value=dashboard),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(life_trial.main(["prepare", "--source-file", str(path)]), 0)
+        dashboard.trial.assert_called_once_with(
+            "prepare", source_name=path.name, source_text="预算、停止与恢复")
+
+    def test_acceptance_prepare_rejects_invalid_sources_before_login(self):
+        empty = self.source / "empty.txt"
+        empty.write_text(" \n", encoding="utf-8")
+        invalid = self.source / "invalid.txt"
+        invalid.write_bytes(b"\xff")
+        for arguments in ([], ["--source-file", "missing.txt"],
+                          ["--source-file", str(empty)], ["--source-file", str(invalid)]):
+            with (
+                self.subTest(arguments=arguments),
+                patch.object(life_trial, "SOURCE_ROOT", self.source),
+                patch.object(life_trial, "Dashboard") as dashboard,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+                self.assertRaises(SystemExit) as raised,
+            ):
+                life_trial.main(["prepare", *arguments])
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("--source-file", errors.getvalue())
+            dashboard.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ import os
 import secrets
 import sys
 
-from workspace import RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
+from workspace import DAFEIYU_BASE_REFERENCE, RUNTIME_ROOT as ROOT, SOURCE_ROOT, TOOLS
+from patch_chat_efficiency import CHAT_MODALITIES
 
 ASTRO = ROOT / "astrbot"
 DATA = ASTRO / "data"
@@ -203,7 +204,7 @@ def apply():
     context_policy = {
         "enabled": True, "input_budget": 16000, "recent_rounds": 12,
         "summary_max_tokens": 900, "summary_input_chars": 24000,
-        "route_simple_chat_tools": True,
+        "route_simple_chat_tools": True, "summary_background": True,
     }
     if isinstance(old_chat.get("companion_context"), dict):
         context_policy.update(old_chat["companion_context"])
@@ -215,7 +216,7 @@ def apply():
             "provider_type": "chat_completion",
             "model": settings["deepseek_model"],
             "enable": bool(chat_key),
-            "modalities": ["text", "image"],
+            "modalities": list(CHAT_MODALITIES),
             "custom_extra_body": {"thinking": {"type": "disabled"}},
             "companion_context": context_policy,
         },
@@ -289,19 +290,10 @@ def apply():
     config["agent_runner"]["config"]["model"]["provider_id"] = "deepseek_chat"
     config["agent_runner"]["config"]["persona"]["persona_id"] = "大肥鱼"
     config["agent_runner"]["config"]["misc"].update({"max_steps": 40, "tool_call_timeout": 300})
-    groups_umo = ["qq:GroupMessage:" + value for value in groups]
-    config.setdefault("provider_ltm_settings", {}).update(
-        {
-            "group_icl_enable": True,
-            "group_message_history_enable": True,
-            "active_reply": {
-                "enable": bool(groups),
-                "method": "possibility_reply",
-                "possibility_reply": 0.3,
-                "whitelist": groups_umo,
-            },
-        }
-    )
+    from patch_chat_boundaries import configure_group_settings
+    from patch_experience import configure_experience_plugin
+
+    configure_group_settings(config)
     config["kb_names"] = ["大肥鱼手册", "热梗词典"]
     write_json(DATA / "cmd_config.json", config)
 
@@ -338,9 +330,6 @@ def apply():
                     "session_list": [session] if session else [],
                 }
             )
-            values["friend_settings"]["auto_trigger_settings"].update(
-                {"enable_auto_trigger": True, "auto_trigger_after_minutes": 30}
-            )
             values["friend_settings"]["context_settings"]["source_mode"] = "conversation_history"
             values["friend_settings"]["schedule_settings"].update(
                 {
@@ -350,11 +339,6 @@ def apply():
                     "max_unanswered_times": 2,
                 }
             )
-            if (
-                "想聊新鲜话题时可以先联网搜索。"
-                not in values["friend_settings"]["proactive_prompt"]
-            ):
-                values["friend_settings"]["proactive_prompt"] += "\n想聊新鲜话题时可以先联网搜索。"
             values["group_settings"].update({"enable": False, "session_list": []})
             values["web_admin"]["enabled"] = False
             values["telemetry_config"]["enabled"] = False
@@ -366,7 +350,7 @@ def apply():
         elif name == "stealer":
             values.update(
                 {
-                    "steal_meme": True,
+                    "steal_meme": values.get("steal_meme", True),
                     "vision_provider_id": "bailian_vision",
                     "emotion_analysis_provider_id": "deepseek_chat",
                     "enable_embedding_search": True,
@@ -401,20 +385,19 @@ def apply():
             ]
             values["router_config"].update({"chain_text2img": "draw", "chain_selfie": "selfie"})
             prompt = "蓝色鲸鱼娘，大肥鱼，蓝色长发，蓝色眼睛，可爱的二次元少女，保持参考图中的角色外貌和服装风格。"
-            ref = str(SOURCE_ROOT / "assets/selfie-reference.png")
             values["persona_config"].update(
                 {
                     "active_persona_id": "dafeiyu",
                     "persona_name": "大肥鱼",
                     "persona_base_prompt": prompt,
-                    "persona_ref_image": ["files/persona_config/persona_ref_image/dafeiyu.png"],
+                    "persona_ref_image": [DAFEIYU_BASE_REFERENCE],
                     "profiles": [
                         {
                             "__template_key": "persona",
                             "id": "dafeiyu",
                             "persona_name": "大肥鱼",
                             "persona_base_prompt": prompt,
-                            "persona_ref_image": [ref],
+                            "persona_ref_image": [DAFEIYU_BASE_REFERENCE],
                         }
                     ],
                 }
@@ -422,6 +405,7 @@ def apply():
             values["optimizer_config"].update(
                 {"enable_optimizer": False, "optimizer_style": "日系插画大师"}
             )
+        configure_experience_plugin(name, values)
         write_json(path, values)
 
     network = {

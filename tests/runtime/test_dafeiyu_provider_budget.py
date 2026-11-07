@@ -9,10 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from openai.types.chat.chat_completion import ChatCompletion
+from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
 from astrbot.core.agent.tool import FunctionTool, ToolSet
+from astrbot.core.provider.entities import LLMResponse, ProviderRequest
 from astrbot.core.provider.sources.openai_source import ProviderOpenAIOfficial
-from astrbot.core.provider.entities import LLMResponse
+from astrbot.core.tools.cron_tools import FutureTaskTool
 from astrbot.core.utils import chat_efficiency
+from astrbot.core.utils.conversation_turn import route_capabilities
 
 
 class ProviderBudgetTests(unittest.IsolatedAsyncioTestCase):
@@ -59,6 +62,28 @@ class ProviderBudgetTests(unittest.IsolatedAsyncioTestCase):
         wire = self.create.await_args.kwargs["tools"]
         self.assertEqual([t["function"]["name"] for t in wire], ["memorize_long_term_memory"])
         self.assertEqual(len(tools.tools), 2)
+
+    async def test_reminder_tool_reaches_the_sdk_through_the_agent(self):
+        prompt = "请创建一个名为‘体验日程提醒’的一次性任务，十分钟后提醒我休息一下"
+        event = SimpleNamespace(get_message_str=lambda: prompt, get_extra=lambda _: None)
+        request = ProviderRequest(prompt=prompt, func_tool=ToolSet([FutureTaskTool()]))
+        route_capabilities(event, request)
+
+        runner = ToolLoopAgentRunner()
+        runner.req = request
+        runner.provider = self.provider
+        self.provider.provider_config["modalities"] = ["text", "image"]
+        self.assertIsNone(runner._func_tool_for_provider())
+
+        self.provider.provider_config["modalities"].append("tool_use")
+        await self.provider._query(
+            {"model": "deepseek-flash", "messages": [{"role": "user", "content": prompt}]},
+            runner._func_tool_for_provider(),
+            request_max_retries=1,
+        )
+        wire = self.create.await_args.kwargs
+        self.assertEqual([tool["function"]["name"] for tool in wire["tools"]], ["future_task"])
+        self.assertEqual(wire["tool_choice"], "auto")
 
 
 if __name__ == "__main__":

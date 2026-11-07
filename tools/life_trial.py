@@ -230,9 +230,23 @@ def main(argv=None):
                                           "recall", "snapshot", "report"))
     parser.add_argument("--trial-id")
     parser.add_argument("--run-id")
+    parser.add_argument("--source-file", type=Path,
+                        help="UTF-8 research material for prepare; relative to the source root")
     parser.add_argument("--authorize-one-message", action="store_true")
     parser.add_argument("--confirm-received", action="store_true")
     args = parser.parse_args(argv)
+    if args.action == "prepare":
+        if args.source_file is None:
+            parser.error("--source-file is required for prepare")
+        root = SOURCE_ROOT.resolve()
+        path = (root / args.source_file.expanduser()).resolve()
+        try:
+            text = path.read_text(encoding="utf-8-sig")[:2000]
+        except (OSError, UnicodeError):
+            parser.error("--source-file must be a readable UTF-8 text file")
+        if not text.strip():
+            parser.error("--source-file must contain research material")
+        source_name = str(path.relative_to(root)) if path.is_relative_to(root) else path.name
     if args.action == "preflight":
         result = preflight()
     elif args.action == "deploy-closed":
@@ -246,9 +260,7 @@ def main(argv=None):
         if args.action == "enable":
             result = enable_trial(client)
         elif args.action == "prepare":
-            path = SOURCE_ROOT / "content/自主生活验收资料.md"
-            text = path.read_text(encoding="utf-8")[:2000]
-            result = client.trial("prepare", source_name=str(path.relative_to(SOURCE_ROOT)),
+            result = client.trial("prepare", source_name=source_name,
                                    source_text=text)
         elif args.action == "run":
             if not args.trial_id:

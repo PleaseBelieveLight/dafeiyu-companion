@@ -23,11 +23,13 @@ class ReleaseTests(unittest.TestCase):
         self.git("init", "--quiet")
         self.git("config", "core.autocrlf", "false")
         self.files = {
-            ".gitignore": b"/AGENTS.md\n/config/settings.json\n/run/\n/dist/\n",
+            ".gitignore": b"/config/settings.json\n/run/\n/dist/\n",
+            "AGENTS.md": b"# Repository Guidelines\n",
             "README.md": "# 大肥鱼\n".encode(),
             "config/settings.example.json": b"{}\n",
             "content/knowledge/资料.md": "运行输入\n".encode(),
             "docs/说明.md": "安装说明\n".encode(),
+            "docs/AGENTS.zh-CN.md": "# 仓库协作规范（中文核对版）\n".encode(),
             "tools/example.py": b"print('source')\n",
             "启动全部.cmd": b"@echo off\r\nexit /b 0\r\n",
         }
@@ -68,7 +70,7 @@ class ReleaseTests(unittest.TestCase):
         return build_release.build_release(tag, output or self.folder / "output", self.root)
 
     def test_archive_preserves_sources_and_excludes_untracked_and_ignored_files(self):
-        self.write("AGENTS.md", b"local instructions")
+        self.write("docs/local-notes.md", b"untracked notes")
         self.write("config/settings.json", b'{"private": "local value"}')
         self.write("run/private.txt", b"local runtime")
         self.write("tools/local.py", b"untracked helper")

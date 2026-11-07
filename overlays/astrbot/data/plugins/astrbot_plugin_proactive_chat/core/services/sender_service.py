@@ -582,7 +582,7 @@ class SenderService:
         # Proactive speech remains independent of the normal chat voice switch.
         # The decoration hook synthesizes the planned spoken channel exactly once.
         event.set_extra("fy_proactive", True)
-        event.set_extra("fy_proactive_tts", bool(tts_conf.get("enable_tts", True)))
+        event.set_extra("fy_proactive_tts", tts_conf.get("enable_tts") is True)
         plan = parse_voice_reply(text)
         if plan is not None:
             event.set_extra("_fy_voice_plan", plan)

@@ -259,7 +259,8 @@ class TrialControl:
     def status(self):
         plugin = self.plugin
         result = {"plugin_ready": plugin.store is not None, "trial_mode":
-                  plugin.config.get("trial_mode") is True, "periodic_scheduler": False,
+                  plugin.config.get("trial_mode") is True, "periodic_scheduler":
+                  getattr(getattr(plugin, "scheduler", None), "task", None) is not None,
                   "effective_limits": limits(plugin.config)}
         if plugin.store is None:
             return result

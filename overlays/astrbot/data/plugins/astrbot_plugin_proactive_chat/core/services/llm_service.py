@@ -47,8 +47,6 @@ class LlmService:
 
         if include_time:
             lines.append(f"- 当前时间：{format_current_time(self.plugin.timezone)}")
-        if include_unanswered:
-            lines.append(f"- 本次主动消息的未回复累计次数：{unanswered_count}")
 
         session_type = ""
         if isinstance(session_config, dict):
@@ -322,7 +320,7 @@ class LlmService:
         motivation_template = session_config.get("proactive_prompt", "") or ""
         now_str = format_current_time(plugin.timezone)
         final_user_simulation_prompt = motivation_template.replace(
-            "{{unanswered_count}}", str(unanswered_count)
+            "{{unanswered_count}}", ""
         ).replace("{{current_time}}", now_str)
 
         logger.debug("[主动消息] 已生成包含动机和时间的 Prompt 喵。")

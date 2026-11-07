@@ -3,11 +3,142 @@
 import json
 import re
 import time
+from datetime import datetime
 
 from .state import ConflictError, StateError, _row
 
 CONTEXT_MARKER = "【自主生活当前记录】"
 TOOLS = {"life_recall"}
+EXECUTION_RULES = (
+    "【研究执行事实约束】\n"
+    "研究进度只依据本轮自主生活记录中的实际运行、笔记和检索记录；"
+    "历史聊天、长期记忆里的承诺和待办都不是已执行证据。"
+    "next_step 只是计划，paused 是暂停。worker=idle 时没有研究在执行；"
+    "running 数据库记录也不能替代活跃执行器证据。"
+    "没有新运行或新笔记时，明确说最后执行日期和此后没有新进展，"
+    "不得用‘一直在查但没找到’掩饰没有执行。"
+    "检索事实依据本轮即时检索回执或 last_search；摘要不等于阅读全文或已核实。"
+    "自动推进开启也只代表会按条件尝试，不保证完成或发送；"
+    "普通聊天里的答应、催促、‘我去查’不会创建任务，不能声称已启动。"
+    "未实际启动或未开启相应功能时，不承诺后台继续、明天补齐或查到主动通知。"
+    "资料缺失、手动暂停、失败和额度限制都按记录如实解释，不能编造忙碌理由。"
+)
+
+RESEARCH_QUESTION = re.compile(
+    r"自主生活|研究.{0,5}(?:进度|目标|计划|到哪|明白|怎么样|得如何)|最近在研究"
+)
+RESEARCH_FOLLOWUP = re.compile(
+    r"(?:所以)?(?:怎么样|如何|有结果|有进展|查完|查到了?|查到什么)(?:了|没有|了吗|吗)?[？?。]?"
+)
+IMMEDIATE_SEARCH = re.compile(
+    r"(?:请|麻烦)?(?:你)?(?:帮我)?(?:现在(?:就)?|马上|立刻|直接)\s*(?:联网|上网)?"
+    r"(?:查(?:一下|一查|查)?|搜(?:一下|一搜|搜)?)(?P<topic>[^\n]*)"
+)
+SEARCH_TOPIC = re.compile(
+    r"(?:(?:请|麻烦)?(?:帮我)?(?P<web>联网|上网|网上)?(?:查一下|查一查|查查|搜一下|搜一搜|搜搜)"
+    r"(?P<query>[^\n]+)|(?P<subject>[^，。！？?!\n]{2,36}?)(?:你|的)?研究"
+    r"(?:到哪(?:了|儿了)?|得怎么样(?:了)?|明白了没有|进度(?:如何|怎么样)?))"
+)
+ACKNOWLEDGMENT = re.compile(r"(?:嗯+|好(?:的|吧|啊)?|行|对|收到|别忘了)(?:[，,、 ]*(?:别忘了|继续|接着来))?")
+REFERENCED_TOPIC = re.compile(r"(?:刚才|上面|上次)?(?:这个|那个|这件事|那件事|这份资料|那份资料)|刚才说的")
+PRIVATE_LOOKUP = re.compile(
+    r"本机|本地|(?:配置|代码|日志|数据库|文件)(?:里|中)|聊天记录|密码|验证码|密钥|api[ _-]?key",
+    re.IGNORECASE,
+)
+PRIVATE_VERIFICATION = re.compile(
+    r"https?://|@|\d{6,}|私聊|内部|截图|附件|我(?:家|的|们的|公司|同事|朋友)", re.I,
+)
+SUBJECT_QUESTION = re.compile(
+    r"(?P<subject>[\w《》· -]{2,32}?)(?:打[得的]?过|能打赢|能赢|怎么|如何|是否|什么时候|是什么|有没有|会不会)"
+    r"[^，,。；;：:？！?!\r\n]{0,96}"
+)
+
+
+def recent_user_texts(req):
+    """Read only the last few actual user turns for a short follow-up."""
+    history = getattr(req, "contexts", None)
+    if not history:
+        history = getattr(getattr(req, "conversation", None), "history", None)
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except ValueError:
+            return []
+    if not isinstance(history, list):
+        return []
+    texts = []
+    for entry in reversed(history[-12:]):
+        if not isinstance(entry, dict) or entry.get("role") != "user":
+            continue
+        body = entry.get("content")
+        if isinstance(body, list):
+            # A media-only turn can change the subject, so stop there.
+            if any(isinstance(part, dict) and part.get("type") == "image_url" for part in body):
+                break
+            body = next((part.get("text") for part in body if isinstance(part, dict)
+                         and part.get("type") == "text" and not part.get("_no_save")), None)
+        if not isinstance(body, str):
+            continue
+        texts.append(body.strip().rstrip("？?。！!"))
+    return texts
+
+
+def research_question(text, req):
+    if RESEARCH_QUESTION.search(text):
+        return True
+    if not RESEARCH_FOLLOWUP.fullmatch(text):
+        return False
+    preceding = next((line for line in recent_user_texts(req)
+                      if not ACKNOWLEDGMENT.fullmatch(line)), "")
+    return bool(RESEARCH_QUESTION.search(preceding))
+
+
+def verification_search_topic(req, goals):
+    """Resolve a request for accuracy to a recent explicit public search or known public goal."""
+    previous = next((line for line in recent_user_texts(req)
+                     if not ACKNOWLEDGMENT.fullmatch(line)), "")
+    if PRIVATE_LOOKUP.search(previous) or PRIVATE_VERIFICATION.search(previous):
+        return None
+    explicit = SEARCH_TOPIC.fullmatch(previous)
+    if explicit and explicit["web"] and explicit["query"]:
+        return explicit["query"].strip()[:180] or None
+    question = SUBJECT_QUESTION.fullmatch(previous)
+    if not question:
+        return None
+    subject = question["subject"].strip()
+    if len(subject) < 2:
+        return None
+    matches = set()
+    for goal in goals:
+        title = goal["title"]
+        audit = goal["checkpoint"].get("last_search")
+        if (subject in title and not PRIVATE_LOOKUP.search(title) and isinstance(audit, dict)
+                and audit.get("status") == "returned" and isinstance(audit.get("query"), str)
+                and title in audit["query"]):
+            matches.add(title)
+    if len(matches) == 1:
+        return f"{next(iter(matches))} {previous}"[:180]
+    return None
+
+
+def immediate_search_topic(text, req):
+    """Return None for other chat and an empty string for an ambiguous lookup."""
+    match = IMMEDIATE_SEARCH.fullmatch(text.rstrip("。！？?!"))
+    if not match:
+        return None
+    topic = match["topic"].strip(" ，,：:")
+    if not topic or REFERENCED_TOPIC.fullmatch(topic):
+        topic = ""
+        preceding = next((line for line in recent_user_texts(req)
+                          if not ACKNOWLEDGMENT.fullmatch(line)), "")
+        prior = SEARCH_TOPIC.fullmatch(preceding)
+        if prior:
+            topic = (prior["query"] or prior["subject"]).strip()
+    if topic in {"吗", "嘛", "么", "吧", "什么", "一下", "资料"}:
+        return ""
+    if PRIVATE_LOOKUP.search(topic):
+        return None
+    return topic[:180]
 
 
 def is_owner_event(event, config):
@@ -95,6 +226,9 @@ def parse_command(text):
     if match:
         return {"action": {"暂停": "pause", "继续": "resume", "取消": "cancel"}[match[1]],
                 "target": match[2].strip(), "content": ""}
+    match = re.fullmatch(r"(?:现在(?:就)?|马上|立刻)(?:推进|运行)(?:研究)?目标\s+([^\n]+)", text)
+    if match:
+        return {"action": "run", "target": match[1].strip()}
     match = re.fullmatch(r"(调整目标|关于目标)\s+([^：:\n]+)[：:]\s*(.+)", text)
     if match:
         return {"action": "adjust" if match[1] == "调整目标" else "feedback",
@@ -195,22 +329,50 @@ class LifeChat:
             for row in episodes
         )
 
-    def context(self, scope):
+    def context(self, scope, *, runtime=None):
+        from .activity_state import SHANGHAI
         from .selection_state import GoalPolicy
         policy = GoalPolicy(self.store)
         goals = self.goals(scope)[:3]
         episodes = self.store.query_episodes(scope, limit=5)
         notes = []
+        execution = []
         for goal in goals:
+            run = self.store.db.execute("""SELECT id,status,started_at,ended_at,summary
+                FROM runs WHERE scope=? AND goal_id=? ORDER BY started_at DESC LIMIT 1""",
+                (scope, goal["id"])).fetchone()
+            latest = dict(run) if run else None
+            if latest:
+                latest["summary"] = latest["summary"][:100]
+                for key in ("started_at", "ended_at"):
+                    if latest[key] is not None:
+                        latest[key] = datetime.fromtimestamp(latest[key], SHANGHAI).isoformat(
+                            timespec="seconds")
+            audit = goal["checkpoint"].get("last_search")
+            if isinstance(audit, dict):
+                audit = {key: value[:300] if isinstance(value, str) else value
+                         for key, value in audit.items() if key in {
+                             "status", "query", "at", "results", "new_sources"}}
+            else:
+                audit = None
+            execution.append({"goal_id": goal["id"], "last_run": latest,
+                              "last_search": audit,
+                              "pause_reason": goal["checkpoint"].get("pause_reason", ""),
+                              "resume_policy": goal["checkpoint"].get("resume_policy", ""),
+                              "last_round_had_new_sources": goal["checkpoint"].get("progress")})
             note = _row(self.store.db.execute("""SELECT * FROM notes WHERE scope=? AND goal_id=?
                 ORDER BY version DESC LIMIT 1""", (scope, goal["id"])).fetchone())
             if note:
                 valid = all(self.store.get_episode(scope, source)
                             for source in note["evidence_ids"])
                 notes.append({"goal_id": goal["id"], "version": note["version"],
+                              "created_at": datetime.fromtimestamp(
+                                  note["created_at"], SHANGHAI).isoformat(timespec="seconds"),
                               "sources_current": valid,
                               "excerpt": note["body"][:400] if valid else "来源已修订，需重写笔记"})
         payload = {
+            "execution": execution,
+            "runtime": runtime or {"worker": "unknown"},
             "goals": [{key: goal[key] for key in (
                 "id", "title", "why", "status", "version", "next_step", "checkpoint",
                 "completion_criteria", "updated_at",

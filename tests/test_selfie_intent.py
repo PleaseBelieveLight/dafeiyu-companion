@@ -14,11 +14,39 @@ from selfie_intent import (
     fallback_selfie_action,
     parse_selfie_plan,
     recent_selfie_dialogue,
+    requested_action,
     selfie_request_kind,
 )
 
 
 class SelfieIntentTests(unittest.TestCase):
+    def test_action_requests_accept_showing_a_pose_and_picture_wording(self):
+        cases = {
+            "给我跳个舞看看": "跳个舞",
+            "我要看你跳舞的样子": "跳舞",
+            "我想看看你跳舞的样子！": "跳舞",
+            "跳舞的图片": "跳舞",
+            "给我发张你跳舞的照片": "跳舞",
+            "让我看看你转圈的样子": "转圈",
+            "大肥鱼来转一圈给我看": "转一圈",
+            "请给我跳一段舞吧！": "跳一段舞",
+            "摆个姿势": "摆个姿势",
+            "[主人的朋友 测试昵称(1000001)] 我要看你跳舞的样子": "跳舞",
+        }
+        for message, action in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(requested_action(message), action)
+
+    def test_action_discussion_negation_other_subjects_and_video_are_not_picture_requests(self):
+        for message in (
+            "她在跳舞", "我要看她跳舞的样子", "发张猫跳舞的图片", "我在学跳舞",
+            "你会跳舞吗", "你跳舞的样子很可爱", "不要给我跳舞", "别发跳舞的图片",
+            "只给我视频，不要图片", "我要看你跳舞的视频", "跳舞的图片怎么生成",
+            "帮我画一只正在跳舞的猫", "我要看你跳舞的样子，不要发图",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(requested_action(message), "")
+
     def test_explicit_requests_and_conversational_followups_are_distinct(self):
         for message in ["生成一张自拍图片", "[主人] 发张自拍", "来个自拍", "发张你的照片", "自拍"]:
             with self.subTest(message=message):

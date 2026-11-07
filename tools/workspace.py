@@ -5,6 +5,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 TOOLS = SOURCE_ROOT / "tools"
+DAFEIYU_BASE_REFERENCE = "files/persona_config/persona_ref_image/dafeiyu.png"
 
 
 def runtime_root() -> Path:

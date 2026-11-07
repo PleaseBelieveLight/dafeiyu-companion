@@ -24,7 +24,7 @@ class DistributionTests(unittest.TestCase):
                 documents = set((ROOT / folder).rglob("*.md"))
                 self.assertTrue(documents)
                 self.assertTrue(documents.issubset(exported))
-        self.assertNotIn(ROOT / "AGENTS.md", exported)
+        self.assertIn(ROOT / "AGENTS.md", exported)
 
     def test_archive_tree_ignores_commit_root_name(self):
         with tempfile.TemporaryDirectory() as folder:

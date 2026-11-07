@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "overlays/astrbot/astrbot/core/utils"))
 sys.path.insert(0, str(ROOT / "tools"))
 import chat_efficiency as policy
-from context_parts import set_temporary_context
-from patch_chat_efficiency import apply_chat_efficiency, configure_policy
+from context_parts import set_temporary_context, skip_automatic_recall
+from patch_chat_efficiency import MEMORY_RECALL_PATH, apply_chat_efficiency, apply_memory_recall_focus, configure_policy
 from model_usage import attach_browser_metering
 from chat_usage import report
 
@@ -31,6 +31,15 @@ class ToolSet:
 
 
 class ContextPartTests(unittest.TestCase):
+    def test_media_placeholders_and_local_repairs_do_not_trigger_long_term_recall(self):
+        for query in ("[对方发来一张图片或表情包]", "[图片] [Image 1: montage]", " 怎么回事？！", "然后呢",
+                      "不知道说啥，只能找你解解闷了", "给我个准确结果吧", "那你猜一猜谁能赢"):
+            with self.subTest(query=query):
+                self.assertTrue(skip_automatic_recall(query))
+        for query in ("怎么回事，上周那次研究为什么停了", "[图片] 你还记得上次的猫吗", "帮我找以前聊过的解法"):
+            with self.subTest(query=query):
+                self.assertFalse(skip_automatic_recall(query))
+
     def test_replacement_is_local_temporary_and_does_not_remove_real_user_data(self):
         user = {"type": "text", "text": "[state]\nuser quoted this"}
         other = {"type": "text", "text": "[other]", "_no_save": True}
@@ -60,6 +69,18 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         self.logger.start()
         self.addCleanup(self.logger.stop)
 
+    async def test_legacy_cron_pair_is_removed_only_from_outgoing_context(self):
+        original = {"role": "user", "content": "Output your last task result below."}
+        visible = {"role": "assistant", "content": "这里是用户真实问答"}
+        cron = {"role": "assistant", "content": "[CronJob] 测试 triggered at 2026-11-06T10:00:00+08:00, 任务内部结果"}
+        messages = [original, visible, original, cron, {"role": "user", "content": "早安"}]
+        request = {"messages": messages}
+        provider = types.SimpleNamespace(provider_config={})
+        result, _ = await policy.prepare_chat_payload(provider, request, None)
+        self.assertEqual(result["messages"], [original, visible, messages[-1]])
+        self.assertEqual(request["messages"], messages)
+        self.assertIn(cron, messages)
+
     def payload(self, rounds=20):
         messages = [{"role": "system", "content": "stable persona"}]
         for i in range(rounds):
@@ -84,6 +105,44 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         await self.prepare(payload)
         self.provider.text_chat.assert_awaited_once()
         self.assertLess(policy.estimate_input(result), policy.estimate_input(payload))
+
+    async def test_topic_switch_and_return_keep_history_and_reuse_the_existing_summary(self):
+        payload = self.payload()
+        payload["messages"].append({"role": "user", "content": ""})
+        for current in ("我准备睡觉了", "最近想谈恋爱了", "那你呢？", "回到刚才吃饭那个事"):
+            payload["messages"][-1]["content"] = current
+            original = copy.deepcopy(payload)
+            result, _ = await self.prepare(payload)
+            self.assertEqual(payload, original)
+            self.assertEqual(result["messages"][-9:], payload["messages"][-9:])
+            self.assertEqual(str(result["messages"]).count(current), 1)
+            self.assertTrue(result["messages"][1]["content"].startswith("【较早对话摘要】"))
+            self.assertIn("用户已经吃饭，周五有约定。", result["messages"][1]["content"])
+        self.provider.text_chat.assert_awaited_once()
+
+    async def test_background_summary_leaves_first_reply_unblocked_and_reuses_valid_result(self):
+        self.provider.provider_config["companion_context"]["summary_background"] = True
+        entered, release = asyncio.Event(), asyncio.Event()
+        result = self.provider.text_chat.return_value
+
+        async def summary(**kwargs):
+            entered.set()
+            await release.wait()
+            return result
+
+        self.provider.text_chat.side_effect = summary
+        payload = self.payload()
+        result_before, _ = await self.prepare(payload)
+        self.assertIs(result_before, payload)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        result_while_busy, _ = await self.prepare(payload)
+        self.assertIs(result_while_busy, payload)
+        task = next(iter(policy._REFRESHES.values()))
+        release.set()
+        await task
+        result_after, _ = await self.prepare(payload)
+        self.assertLess(len(result_after["messages"]), len(payload["messages"]))
+        self.provider.text_chat.assert_awaited_once()
 
     async def test_summary_output_cap_is_present_in_actual_wire_payload(self):
         token = policy.SOURCE.set("context_summary")
@@ -244,17 +303,47 @@ class AccountingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PatchTests(unittest.TestCase):
+    def test_memory_focus_patch_is_after_storage_and_before_retrieval(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / MEMORY_RECALL_PATH
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "from astrbot.core.agent.message import TextPart\n\n"
+                "async def handler(actual_query):\n"
+                "    if actual_query:\n"
+                "        if True:\n"
+                "            if True:\n"
+                "                await store_message()\n"
+                "                # 获取过滤配置\n"
+                "                await search_memories()\n",
+                encoding="utf-8",
+            )
+            apply_memory_recall_focus(root)
+            first = path.read_text(encoding="utf-8")
+            apply_memory_recall_focus(root)
+            self.assertEqual(first, path.read_text(encoding="utf-8"))
+            self.assertLess(first.index("await store_message()"), first.index("if skip_automatic_recall"))
+            self.assertLess(first.index("if skip_automatic_recall"), first.index("await search_memories()"))
+            compile(first, str(path), "exec")
+
     def test_deployed_policy_and_user_overrides_survive_repeated_updates(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             path = root / "astrbot/data/cmd_config.json"
             path.parent.mkdir(parents=True)
-            original = {"provider": [{"id": "deepseek_chat", "key": "private-value"},
-                                     {"id": "vision", "model": "keep-model"}],
-                        "other_setting": "keep-value"}
+            original = {
+                "provider": [
+                    {"id": "deepseek_chat", "provider_source_id": "deepseek_source",
+                     "key": "private-value", "modalities": ["text", "image"]},
+                    {"id": "vision", "model": "keep-model", "modalities": ["text", "image"]},
+                ],
+                "other_setting": "keep-value",
+            }
             path.write_text(json.dumps(original), encoding="utf-8")
             configure_policy(root)
             value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["provider"][0]["modalities"], ["text", "image", "tool_use"])
             self.assertEqual(value["provider"][0]["companion_context"]["input_budget"], 16000)
             value["provider"][0]["companion_context"]["input_budget"] = 24000
             path.write_text(json.dumps(value), encoding="utf-8")
@@ -262,6 +351,10 @@ class PatchTests(unittest.TestCase):
             self.assertEqual(value, json.loads(path.read_text(encoding="utf-8")))
             self.assertEqual(value["provider"][1], original["provider"][1])
             self.assertEqual(value["provider"][0]["key"], "private-value")
+            value["provider"][0]["modalities"] = ["text"]
+            path.write_text(json.dumps(value), encoding="utf-8")
+            configure_policy(root)
+            self.assertEqual(value, json.loads(path.read_text(encoding="utf-8")))
 
     def test_patch_is_checked_idempotent_and_covers_both_request_modes(self):
         with tempfile.TemporaryDirectory() as folder:
