@@ -61,10 +61,11 @@
 
 ## 版权与致谢
 
-**Copyright © 2026 PleaseBelieveLight（本仓库原创部分）**
+**Copyright © 2026 PleaseBelieveLight**
 
-本仓库的新增整合代码与 AstrBot 兼容修改采用 **AGPL-3.0-or-later**
-。作者保留许可证未授予的权利。使用、修改或再分发时，请遵循适用的许可条款，并在分发时保留原有的版权及许可声明。[许可证](LICENSE)
+本项目的核心功能以自主开发为主，项目代码采用 **AGPL-3.0-or-later**。
+作者保留许可证未授予的权利。使用、修改或再分发时，请遵循适用的许可条款，并在分发时保留原有的版权及许可声明。[许可证](LICENSE)
 
-感谢大肥鱼原项目，以及 AstrBot、NapCatQQ
-和其他上游项目的贡献者。第三方组件与角色素材按各自的许可使用，署名归各自作者。[大肥鱼原项目](https://github.com/whyever77/dafeiyu-astrbot) · [第三方来源与许可](THIRD_PARTY_NOTICES.md) · [角色素材署名](assets/ATTRIBUTION.md)
+感谢大肥鱼原项目，以及 AstrBot、NapCatQQ 和其他上游项目的贡献者。
+第三方组件与角色素材的权利归各自权利人，使用时遵循各自的许可和署名要求。
+[大肥鱼原项目](https://github.com/whyever77/dafeiyu-astrbot) · [第三方来源与许可](THIRD_PARTY_NOTICES.md) · [角色素材署名](assets/ATTRIBUTION.md)

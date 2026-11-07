@@ -1,8 +1,3 @@
-# Repository Guidelines
-
-Keep this document in English and update the [Chinese review copy](docs/AGENTS.zh-CN.md) together.
-See [README.md](README.md) for an overview and first-time setup.
-
 ## Workspace
 
 - Target Windows 10/11 x64 and Python 3.12. Resolve paths through `tools/workspace.py` and respect

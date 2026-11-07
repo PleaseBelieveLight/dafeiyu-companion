@@ -13,10 +13,5 @@
 
 - [仓库协作规范（中文核对版）](AGENTS.zh-CN.md) · 代码、文档与验收规则
 - [自动发布](自动发布.md) · 标签、源码包与失败重试
-- [对话上下文与用量](Token消耗与对话智能评审.md) · 摘要预算、统计与排障
 - [运行资料清单](../content/README.md) · 人格、知识源与验收素材的读取方式
 - [第三方来源与许可](../THIRD_PARTY_NOTICES.md) · [许可证](../LICENSES/) · [素材署名](../assets/ATTRIBUTION.md) · [自拍参考图](../assets/selfie-references/README.md)
-
-## 进行中的方案
-
-- [活人感与对话体验优化方案](活人感与对话体验优化方案.md)
