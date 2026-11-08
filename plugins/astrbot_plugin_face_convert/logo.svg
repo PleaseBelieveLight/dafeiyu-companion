@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>QQ 表情文字转换：微笑对话气泡</title>
+  <defs>
+    <linearGradient id="tile" x1="32" y1="16" x2="224" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFAA71"/>
+      <stop offset="1" stop-color="#EC596C"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="80" y1="60" x2="184" y2="202" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFF0E9"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="59" stroke="white" stroke-opacity=".22" stroke-width="2"/>
+  <path d="M200 125C200 82 169 53 128 53C87 53 56 82 56 125C56 151 67 171 86 184L80 212L115 198C119 199 124 199 128 199C169 199 200 169 200 125Z" fill="#9F354E" fill-opacity=".16"/>
+  <path d="M200 117C200 74 169 45 128 45C87 45 56 74 56 117C56 143 67 163 86 176L80 204L115 190C119 191 124 191 128 191C169 191 200 161 200 117Z" fill="url(#bubble)"/>
+  <path d="M94 103V114M162 103V114" stroke="#B94C5C" stroke-width="12" stroke-linecap="round"/>
+  <path d="M102 139C114 155 142 155 154 139" stroke="#B94C5C" stroke-width="10" stroke-linecap="round"/>
+  <ellipse cx="85" cy="132" rx="11" ry="6" fill="#FFBBAC"/>
+  <ellipse cx="171" cy="132" rx="11" ry="6" fill="#FFBBAC"/>
+</svg>

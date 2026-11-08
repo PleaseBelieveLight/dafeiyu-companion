@@ -1,5 +1,6 @@
 """Apply this installation's settings without printing credentials."""
 
+import asyncio
 import copy
 import json
 import os
@@ -64,6 +65,18 @@ def schema_defaults(schema):
     return values
 
 
+async def disable_local_memory_plugin():
+    """Use AstrBot preferences to disable memory without removing its data."""
+    from astrbot.core import db_helper, sp
+
+    await db_helper.initialize()
+    inactive = await sp.global_get("inactivated_plugins", [])
+    module = "data.plugins.astrbot_plugin_livingmemory.main"
+    if module not in inactive:
+        await sp.global_put("inactivated_plugins", [*inactive, module])
+        await sp.flush()
+
+
 def apply():
     os.environ["ASTRBOT_ROOT"] = str(ASTRO)
     sys.path.insert(0, str(ASTRO))
@@ -98,6 +111,7 @@ def apply():
         "ollama_path": "",
     }
     settings = {**defaults, **read_json(SETTINGS, {})}
+    local_memory = settings.get("local_memory_enabled", True)
     write_json(SETTINGS, settings)
     credentials_path = ROOT / "config/local-access.json"
     credentials = read_json(credentials_path, None)
@@ -235,7 +249,7 @@ def apply():
             "type": "ollama_embedding",
             "provider": "ollama",
             "provider_type": "embedding",
-            "enable": True,
+            "enable": local_memory,
             "embedding_api_base": "http://127.0.0.1:11435",
             "embedding_model": "bge-m3",
             "embedding_dimensions": 1024,
@@ -294,7 +308,7 @@ def apply():
     from patch_experience import configure_experience_plugin
 
     configure_group_settings(config)
-    config["kb_names"] = ["大肥鱼手册", "热梗词典"]
+    config["kb_names"] = ["大肥鱼手册", "热梗词典"] if local_memory else []
     write_json(DATA / "cmd_config.json", config)
 
     plugins = DATA / "plugins"
@@ -353,7 +367,7 @@ def apply():
                     "steal_meme": values.get("steal_meme", True),
                     "vision_provider_id": "bailian_vision",
                     "emotion_analysis_provider_id": "deepseek_chat",
-                    "enable_embedding_search": True,
+                    "enable_embedding_search": local_memory,
                     "embedding_provider_id": "ollama_embedding",
                     "audit_required": False,
                 }
@@ -458,6 +472,9 @@ def apply():
             }
         },
     )
+    if not local_memory:
+        asyncio.run(disable_local_memory_plugin())
+        print("Local memory and knowledge retrieval disabled; chat remains available.")
     print("Configuration saved. Credentials were not printed.")
     return settings
 

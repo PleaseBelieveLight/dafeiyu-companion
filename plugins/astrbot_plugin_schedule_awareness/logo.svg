@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>大肥鱼的日程觉醒：日历与时钟</title>
+  <defs>
+    <linearGradient id="tile" x1="32" y1="16" x2="224" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9C99F6"/>
+      <stop offset="1" stop-color="#5967D8"/>
+    </linearGradient>
+    <linearGradient id="page" x1="60" y1="96" x2="180" y2="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EBEDFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="59" stroke="white" stroke-opacity=".22" stroke-width="2"/>
+  <rect x="49" y="65" width="150" height="146" rx="23" fill="#39449C" fill-opacity=".22"/>
+  <rect x="49" y="57" width="150" height="146" rx="23" fill="url(#page)"/>
+  <path d="M49 80C49 67 59 57 72 57H176C189 57 199 67 199 80V100H49V80Z" fill="#DAD9FF"/>
+  <path d="M87 49V73M161 49V73" stroke="#F9FAFF" stroke-width="12" stroke-linecap="round"/>
+  <rect x="72" y="119" width="17" height="17" rx="5" fill="#9296D9"/>
+  <rect x="104" y="119" width="17" height="17" rx="5" fill="#9296D9"/>
+  <rect x="72" y="151" width="17" height="17" rx="5" fill="#9296D9"/>
+  <circle cx="170" cy="170" r="47" fill="#5967C9" fill-opacity=".15"/>
+  <circle cx="170" cy="166" r="43" fill="#FFE0A3" stroke="#FFF8E8" stroke-width="7"/>
+  <path d="M170 141V166L186 177" stroke="#6A59A2" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="170" cy="166" r="6" fill="#6A59A2"/>
+</svg>

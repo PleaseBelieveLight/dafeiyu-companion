@@ -31,6 +31,22 @@ python tools/launch.py request-trace status
 `$env:DAFEIYU_NO_PAUSE = '1'` 关闭暂停；脚本会保留任务的退出码。 如需自定义运行目录，设置
 `DAFEIYU_RUNTIME_ROOT`，所有入口都会继承该设置。
 
+## 不安装本地记忆模型
+
+只需 DeepSeek 基础聊天时，可运行：
+
+```powershell
+.\scripts\安装配置\安装.cmd --skip-ollama
+```
+
+此选项跳过 Ollama 和 bge-m3，在本机配置中保存 `local_memory_enabled: false`；
+不启动 Ollama，禁用长期记忆插件、知识库检索及表情包向量检索。普通聊天历史和人格仍可使用，
+已有记忆数据不会删除。`--skip-model` 仅推迟下载 bge-m3，仍会安装并启动 Ollama。
+
+以后要恢复本地记忆，先停止服务，不带 `--skip-ollama` 重新运行安装脚本，
+再将运行目录 `config/settings.json` 的 `local_memory_enabled` 改为 `true`，
+通过配置向导保存并启动，并在 AstrBot 插件管理中启用长期记忆插件。
+
 ## 本地运行与数据目录
 
 默认目录为项目文件夹内的 `.local/`。它整体排除在 Git 和源码发布包之外，内部结构保持不变：

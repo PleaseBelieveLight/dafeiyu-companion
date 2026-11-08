@@ -7,7 +7,7 @@ import types
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -98,6 +98,30 @@ class DistributionTests(unittest.TestCase):
             self.assertEqual(json.loads((source / ".local/config/settings.json").read_text()), {})
             self.assertFalse((source / "run").exists())
 
+    def test_skip_ollama_never_fetches_binary_and_persists_disabled_memory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "project"
+            source.mkdir()
+            (source / "dependencies.lock.json").write_text(
+                json.dumps({"artifacts": [{"kind": "ollama"}]}), encoding="utf-8"
+            )
+            (source / "config").mkdir()
+            (source / "config/settings.example.json").write_text("{}", encoding="utf-8")
+            args = types.SimpleNamespace(
+                root=source / ".local", stage_only=True, sources_only=False, skip_ollama=True
+            )
+            with patch.object(workspace, "SOURCE_ROOT", source), \
+                patch.object(install, "SOURCE", source), \
+                patch.object(install, "os", types.SimpleNamespace(name="nt")), \
+                patch.object(install.sys, "version_info", (3, 12)), \
+                patch.object(install, "find_program", return_value=None), \
+                patch.object(install, "fetch") as fetch, \
+                patch.object(install, "apply_overlays"):
+                install.install(args)
+            fetch.assert_not_called()
+            settings = install.read_json(source / ".local/config/settings.json")
+            self.assertFalse(settings["local_memory_enabled"])
+
     def test_installer_requires_migration_when_a_legacy_runtime_exists(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "project"
@@ -133,6 +157,40 @@ class DistributionTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "Migrate"):
                 install.install(args)
             self.assertFalse(args.root.exists())
+
+
+class LocalMemoryPreferenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabling_memory_preserves_other_disabled_plugins(self):
+        import apply_config
+
+        sp = types.SimpleNamespace(
+            global_get=AsyncMock(return_value=["data.plugins.other.main"]),
+            global_put=AsyncMock(), flush=AsyncMock(),
+        )
+        core = types.ModuleType("astrbot.core")
+        core.sp = sp
+        core.db_helper = types.SimpleNamespace(initialize=AsyncMock())
+        with patch.dict(sys.modules, {"astrbot.core": core}):
+            await apply_config.disable_local_memory_plugin()
+        sp.global_put.assert_awaited_once_with(
+            "inactivated_plugins",
+            ["data.plugins.other.main", "data.plugins.astrbot_plugin_livingmemory.main"],
+        )
+        sp.flush.assert_awaited_once()
+
+    async def test_disabling_memory_again_does_not_duplicate_preference(self):
+        import apply_config
+
+        sp = types.SimpleNamespace(
+            global_get=AsyncMock(return_value=["data.plugins.astrbot_plugin_livingmemory.main"]),
+            global_put=AsyncMock(), flush=AsyncMock(),
+        )
+        core = types.ModuleType("astrbot.core")
+        core.sp = sp
+        core.db_helper = types.SimpleNamespace(initialize=AsyncMock())
+        with patch.dict(sys.modules, {"astrbot.core": core}):
+            await apply_config.disable_local_memory_plugin()
+        sp.global_put.assert_not_awaited()
 
 
 if __name__ == "__main__":

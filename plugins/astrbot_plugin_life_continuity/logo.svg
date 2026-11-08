@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>大肥鱼自主生活：目标本与生长嫩芽</title>
+  <defs>
+    <linearGradient id="tile" x1="32" y1="16" x2="224" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#49D1B0"/>
+      <stop offset="1" stop-color="#158C96"/>
+    </linearGradient>
+    <linearGradient id="page" x1="64" y1="126" x2="192" y2="210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DBFFF0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="59" stroke="white" stroke-opacity=".22" stroke-width="2"/>
+  <path d="M51 135C78 128 102 132 128 146C154 132 178 128 205 135V207C178 200 154 204 128 218C102 204 78 200 51 207V135Z" fill="#075E69" fill-opacity=".2"/>
+  <path d="M51 127C78 120 102 124 128 138C154 124 178 120 205 127V199C178 192 154 196 128 210C102 196 78 192 51 199V127Z" fill="url(#page)"/>
+  <path d="M128 141V197" stroke="#88CDBB" stroke-width="6" stroke-linecap="round"/>
+  <path d="M70 146C85 145 98 149 109 154M70 166C85 165 98 169 109 174M147 154C158 149 171 145 186 146M147 174C158 169 171 165 186 166" stroke="#88CDBB" stroke-width="6" stroke-linecap="round"/>
+  <path d="M128 130V98" stroke="#E5FFD5" stroke-width="9" stroke-linecap="round"/>
+  <path d="M128 108C97 110 80 94 80 68C109 65 129 80 128 108Z" fill="#E5FFD5"/>
+  <path d="M128 94C126 64 146 45 177 47C179 76 161 96 128 94Z" fill="#C3F585"/>
+</svg>

@@ -190,13 +190,16 @@ def supervise():
         ),
         "napcat": ([ROOT / "napcat/node.exe", ROOT / "napcat/index.js"], ROOT / "napcat"),
     }
+    if not settings.get("local_memory_enabled", True):
+        services.pop("ollama")
+        print("Local memory disabled; Ollama will not start.", flush=True)
     state = {}
     previous = load(RUN / "services.json", {})
     for name in services:
         if process_alive(previous.get(name, {})):
             state[name] = previous[name]
     old_ollama = RUN / "ollama.pid"
-    if "ollama" not in state and old_ollama.exists():
+    if "ollama" in services and "ollama" not in state and old_ollama.exists():
         try:
             proc = psutil.Process(int(old_ollama.read_text().strip()))
             if proc.name().lower() == "ollama.exe":

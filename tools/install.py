@@ -357,12 +357,13 @@ def install(args) -> None:
     target.mkdir(parents=True, exist_ok=True)
     (target / "downloads").mkdir(exist_ok=True)
     lock = read_json(SOURCE / "dependencies.lock.json")
-    ollama = find_program("ollama.exe")
+    skip_ollama = getattr(args, "skip_ollama", False)
+    ollama = None if skip_ollama else find_program("ollama.exe")
     for artifact in lock["artifacts"]:
         kind = artifact["kind"]
         if args.sources_only and kind != "source":
             continue
-        if kind == "ollama" and ollama:
+        if kind == "ollama" and (ollama or skip_ollama):
             continue
         archive = fetch(artifact, args.cache, target / "downloads")
         if kind == "apk":
@@ -395,6 +396,8 @@ def install(args) -> None:
         if settings_path.exists()
         else read_json(SOURCE / "config/settings.example.json")
     )
+    if skip_ollama:
+        settings["local_memory_enabled"] = False
     if not settings.get("ollama_path") and ollama:
         settings["ollama_path"] = str(ollama)
     browser = find_program("chrome.exe")
@@ -425,7 +428,7 @@ def install(args) -> None:
         env=env,
         check=True,
     )
-    if not args.skip_model:
+    if not args.skip_model and not skip_ollama:
         download_model(target, ollama or target / "bin/ollama/ollama.exe")
     write_json(
         target / "run/install-state.json",
@@ -433,7 +436,8 @@ def install(args) -> None:
             "version": 1,
             "staged": True,
             "runtime_ready": True,
-            "embedding_download_skipped": args.skip_model,
+            "embedding_download_skipped": args.skip_model or skip_ollama,
+            "local_memory_enabled": settings.get("local_memory_enabled", True),
         },
     )
     print(
@@ -458,6 +462,10 @@ def main():
     parser.add_argument(
         "--skip-model", action="store_true",
         help="Download bge-m3 later with scripts/安装配置/准备记忆模型.cmd",
+    )
+    parser.add_argument(
+        "--skip-ollama", action="store_true",
+        help="Skip Ollama and embeddings; disable local memory and knowledge retrieval",
     )
     args = parser.parse_args()
     if args.sources_only and not args.stage_only:

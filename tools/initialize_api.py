@@ -83,35 +83,39 @@ if not settings.get("deepseek_api_key", "").strip():
     )
     sys.exit(0)
 
-knowledge = items(api("GET", "/knowledge-bases"))
-for name, filename in [("大肥鱼手册", "指令手册.md"), ("热梗词典", "热梗词典.md")]:
-    kb = next((k for k in knowledge if k.get("kb_name", k.get("name")) == name), None)
-    if kb is None:
-        kb = api(
-            "POST",
-            "/knowledge-bases",
-            json={
-                "name": name,
-                "embedding_provider_id": "ollama_embedding",
-                "chunk_size": 512,
-                "chunk_overlap": 64,
-            },
-        )
-    kb_id = kb.get("kb_id", kb.get("id"))
-    if not kb_id:
-        raise RuntimeError("Knowledge base identifier missing: " + str(kb))
-    documents = items(api("GET", f"/knowledge-bases/{kb_id}/documents"))
-    if not documents:
-        with (KNOWLEDGE / filename).open("rb") as document:
-            uploaded = api(
+if settings.get("local_memory_enabled", True):
+    knowledge = items(api("GET", "/knowledge-bases"))
+    for name, filename in [("大肥鱼手册", "指令手册.md"), ("热梗词典", "热梗词典.md")]:
+        kb = next((k for k in knowledge if k.get("kb_name", k.get("name")) == name), None)
+        if kb is None:
+            kb = api(
                 "POST",
-                f"/knowledge-bases/{kb_id}/documents",
-                files={"file": (filename, document, "text/markdown")},
+                "/knowledge-bases",
+                json={
+                    "name": name,
+                    "embedding_provider_id": "ollama_embedding",
+                    "chunk_size": 512,
+                    "chunk_overlap": 64,
+                },
             )
-        report[name] = {"uploaded": True, "result": uploaded}
-    else:
-        report[name] = {"documents": len(documents)}
-    print("Knowledge prepared: " + name, flush=True)
+        kb_id = kb.get("kb_id", kb.get("id"))
+        if not kb_id:
+            raise RuntimeError("Knowledge base identifier missing: " + str(kb))
+        documents = items(api("GET", f"/knowledge-bases/{kb_id}/documents"))
+        if not documents:
+            with (KNOWLEDGE / filename).open("rb") as document:
+                uploaded = api(
+                    "POST",
+                    f"/knowledge-bases/{kb_id}/documents",
+                    files={"file": (filename, document, "text/markdown")},
+                )
+            report[name] = {"uploaded": True, "result": uploaded}
+        else:
+            report[name] = {"documents": len(documents)}
+        print("Knowledge prepared: " + name, flush=True)
+else:
+    report["knowledge"] = "disabled_local_memory"
+    print("Knowledge initialization skipped: local memory disabled.", flush=True)
 
 tasks = [
     {
