@@ -114,7 +114,8 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
             original = copy.deepcopy(payload)
             result, _ = await self.prepare(payload)
             self.assertEqual(payload, original)
-            self.assertEqual(result["messages"][-9:], payload["messages"][-9:])
+            self.assertEqual(result["messages"][-7:], payload["messages"][-7:])
+            self.assertLessEqual(policy.estimate_input(result), 4000)
             self.assertEqual(str(result["messages"]).count(current), 1)
             self.assertTrue(result["messages"][1]["content"].startswith("【较早对话摘要】"))
             self.assertIn("用户已经吃饭，周五有约定。", result["messages"][1]["content"])
@@ -133,10 +134,11 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         self.provider.text_chat.side_effect = summary
         payload = self.payload()
         result_before, _ = await self.prepare(payload)
-        self.assertIs(result_before, payload)
+        self.assertLessEqual(policy.estimate_input(result_before), 4000)
+        self.assertIn("摘要尚未覆盖", str(result_before))
         await asyncio.wait_for(entered.wait(), timeout=1)
         result_while_busy, _ = await self.prepare(payload)
-        self.assertIs(result_while_busy, payload)
+        self.assertLessEqual(policy.estimate_input(result_while_busy), 4000)
         task = next(iter(policy._REFRESHES.values()))
         release.set()
         await task
@@ -166,16 +168,30 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         await self.prepare(payload, "conversation-b")
         self.assertEqual(self.provider.text_chat.await_count, 3)
 
-    async def test_incremental_catchup_never_discards_unsummarized_history(self):
+    async def test_auxiliary_memory_extraction_keeps_its_input_contract(self):
+        payload = self.payload()
+        token = policy.SOURCE.set("memory")
+        try:
+            result, _ = await self.prepare(payload)
+        finally:
+            policy.SOURCE.reset(token)
+        self.assertIs(result, payload)
+        self.provider.text_chat.assert_not_awaited()
+
+    async def test_incremental_catchup_bounds_wire_and_preserves_original_history(self):
         self.provider.provider_config["companion_context"]["summary_input_chars"] = 2200
         payload = self.payload()
+        original = copy.deepcopy(payload)
         first, _ = await self.prepare(payload)
-        self.assertIs(first, payload)
+        self.assertLessEqual(policy.estimate_input(first), 4000)
+        self.assertIn("摘要尚未覆盖", str(first))
         for _ in range(20):
             result, _ = await self.prepare(payload)
-            if result is not payload:
+            self.assertLessEqual(policy.estimate_input(result), 4000)
+            if "摘要尚未覆盖" not in str(result):
                 break
-        self.assertIsNot(result, payload)
+        self.assertNotIn("摘要尚未覆盖", str(result))
+        self.assertEqual(payload, original)
         self.assertGreater(self.provider.text_chat.await_count, 1)
         second_call = self.provider.text_chat.await_args_list[1].kwargs["prompt"]
         self.assertIn("已经吃饭", second_call)
@@ -184,7 +200,8 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
         payload = self.payload()
         self.provider.text_chat.return_value.completion_text = "invalid json"
         result, _ = await self.prepare(payload)
-        self.assertIs(result, payload)
+        self.assertLessEqual(policy.estimate_input(result), 4000)
+        self.assertEqual(result["messages"][-8:], payload["messages"][-8:])
         with closing(policy.connect(self.path)) as con:
             self.assertEqual(con.execute("SELECT COUNT(*) FROM summaries").fetchone()[0], 0)
         await self.prepare(payload)
@@ -206,11 +223,107 @@ class WorkingContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_image_followup_retains_original_without_base64_in_summary_prompt(self):
         payload = self.payload()
         image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE_IMAGE"}}
-        payload["messages"][1]["content"] = [{"type": "text", "text": "old photo"}, image]
+        payload["messages"][-4]["content"] = [{"type": "text", "text": "old photo"}, image]
         payload["messages"][-2]["content"] = "上次那张照片里是什么？"
         result, _ = await self.prepare(payload)
         self.assertIn("PRIVATE_IMAGE", json.dumps(result))
         self.assertNotIn("PRIVATE_IMAGE", self.provider.text_chat.call_args.kwargs["prompt"])
+
+    async def test_old_images_are_removed_without_needing_a_summary_and_current_media_is_kept(self):
+        payload = self.payload(2)
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
+        payload["messages"][1]["content"] = [{"type": "text", "text": "此前的文字"}, image]
+        original = copy.deepcopy(payload)
+        result, _ = await self.prepare(payload)
+        self.assertEqual(policy.image_count(result["messages"]), 0)
+        self.assertIn("此前的文字", str(result))
+        self.assertEqual(payload, original)
+        payload["messages"][-2]["content"] = [{"type": "text", "text": "看看这张图"}, image, image]
+        result, _ = await self.prepare(payload)
+        self.assertEqual(policy.image_count(result["messages"]), 2)
+        self.assertEqual(result["messages"][-2:], payload["messages"][-2:])
+        self.provider.text_chat.assert_not_awaited()
+
+    async def test_old_or_ambiguous_images_require_resending_instead_of_guessed_visuals(self):
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
+        for mode in ("too_many", "too_old", "outside_recent_rounds", "too_big"):
+            with self.subTest(mode=mode):
+                payload = self.payload()
+                index = 1 if mode == "outside_recent_rounds" else -4
+                parts = [{"type": "text", "text": "图片"}, image]
+                if mode == "too_many":
+                    parts.append(image)
+                if mode == "too_old":
+                    parts[0]["text"] += "<system_reminder>Current datetime: 2000-01-01 12:00 (CST)</system_reminder>"
+                if mode == "too_big":
+                    parts[0]["text"] += "很长的原文" * 5000
+                payload["messages"][index]["content"] = parts
+                payload["messages"][-2]["content"] = "上次那张照片里是什么？"
+                result, _ = await self.prepare(payload, mode)
+                self.assertEqual(policy.image_count(result["messages"]), 0)
+                self.assertIn("请用户重发", str(result))
+
+    async def test_month_old_raw_text_is_excluded_even_in_a_short_chat(self):
+        payload = self.payload(2)
+        payload["messages"][1]["content"] += "<system_reminder>Current datetime: 2000-01-01 12:00 (CST)</system_reminder>"
+        original = copy.deepcopy(payload)
+        self.provider.text_chat.side_effect = TimeoutError()
+        result, _ = await self.prepare(payload)
+        self.assertNotIn("user-0", str(result))
+        self.assertEqual(result["messages"][-2:], payload["messages"][-2:])
+        self.assertEqual(payload, original)
+
+    async def test_truncated_summary_is_not_saved_even_if_the_json_is_closed(self):
+        self.provider.text_chat.return_value.raw_completion = {"choices": [{"finish_reason": "length"}]}
+        result, _ = await self.prepare(self.payload())
+        self.assertLessEqual(policy.estimate_input(result), 4000)
+        with closing(policy.connect(self.path)) as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM summaries").fetchone()[0], 0)
+        self.assertIn("不超过450字", self.provider.text_chat.call_args.kwargs["system_prompt"])
+
+    async def test_421_messages_and_56_images_are_bounded_on_failure_and_cooldown(self):
+        payload = self.payload(210)
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,PRIVATE"}}
+        for index in range(56):
+            payload["messages"][1 + index * 2]["content"] = [
+                {"type": "text", "text": "历史文字"}, image]
+        payload["messages"].append({"role": "user", "content": "我是谁？"})
+        original = copy.deepcopy(payload)
+        self.provider.text_chat.side_effect = TimeoutError()
+        for _ in range(2):
+            result, _ = await self.prepare(payload)
+            self.assertLessEqual(policy.estimate_input(result), 4000)
+            self.assertLessEqual(len(result["messages"]), 10)
+            self.assertEqual(policy.image_count(result["messages"]), 0)
+            self.assertEqual(result["messages"][-1], payload["messages"][-1])
+        self.assertEqual(payload, original)
+        self.provider.text_chat.assert_awaited_once()
+
+    async def test_missing_session_and_large_tool_results_cannot_bypass_budget(self):
+        payload = self.payload(8)
+        payload["messages"][-3]["content"] = "old huge tool result" * 10000
+        result, _ = await self.prepare(payload, scope=None)
+        self.assertLessEqual(policy.estimate_input(result), 4000)
+        self.assertEqual(result["messages"][-2:], payload["messages"][-2:])
+        self.provider.text_chat.assert_not_awaited()
+        payload["messages"][-2]["content"] = "很长的当前输入" * 10000
+        with self.assertRaisesRegex(policy.ContextBudgetExceeded, "超过上下文预算"):
+            await self.prepare(payload)
+        self.provider.text_chat.assert_not_awaited()
+
+    async def test_context_events_respect_recorder_switch_and_contain_counts_only(self):
+        recorder = policy.trace_module()
+        await self.prepare(self.payload())
+        self.assertFalse((self.path.parent / "request_traces").exists())
+        recorder.configure(self.path.parent, True)
+        await self.prepare(self.payload())
+        lines = "".join(p.read_text(encoding="utf-8")
+                        for p in (self.path.parent / "request_traces/events").glob("*.jsonl"))
+        self.assertIn("context.prepared", lines)
+        self.assertIn('"estimated_tokens"', lines)
+        self.assertNotIn("已经吃饭", lines)
+        html = recorder.view().index_page([], True, [json.loads(line) for line in lines.splitlines()])
+        self.assertIn("已裁剪本次上下文", html)
 
     def test_greeting_tools_are_small_but_confirmations_and_tasks_keep_capabilities(self):
         tools = ToolSet(["recall_long_term_memory", "get_screenshot", "generate_selfie"])
@@ -347,7 +460,10 @@ class PatchTests(unittest.TestCase):
             value = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(value["provider"][0]["modalities"], ["text", "image", "tool_use"])
             self.assertEqual(value["provider"][0]["companion_context"]["input_budget"], 16000)
+            self.assertEqual(value["provider"][0]["companion_context"]["history_max_age_hours"], 72)
+            self.assertEqual(value["provider"][0]["companion_context"]["history_image_recent_rounds"], 4)
             value["provider"][0]["companion_context"]["input_budget"] = 24000
+            value["provider"][0]["companion_context"]["history_max_age_hours"] = 48
             path.write_text(json.dumps(value), encoding="utf-8")
             configure_policy(root)
             self.assertEqual(value, json.loads(path.read_text(encoding="utf-8")))

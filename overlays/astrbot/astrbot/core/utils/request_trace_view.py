@@ -11,6 +11,7 @@ SOURCE_NAMES = {
     "proactive": "主动消息", "life": "自主研究", "meme": "表情包处理",
     "media": "媒体处理", "selfie_planner": "自拍规划", "selfie_caption": "自拍理解",
     "image_caption": "图片转述", "browser": "浏览器助手", "qq": "QQ 会话", "tool": "工具",
+    "context": "上下文管理",
 }
 EVENT_NAMES = {
     "turn.received": "收到消息", "turn.finished": "本轮处理结束", "turn.result": "处理结果",
@@ -19,6 +20,9 @@ EVENT_NAMES = {
     "request.finished": "模型调用结束", "capture.failed": "请求记录失败",
     "capture.unavailable": "未取得 HTTP 请求", "capture.finish_failed": "记录收尾失败",
     "capture.response_failed": "响应记录失败",
+    "context.prepared": "已裁剪本次上下文", "context.budget_exceeded": "本轮内容超过上下文预算",
+    "context.summary_started": "开始压缩较早对话", "context.summary_ready": "较早对话摘要已保存",
+    "context.summary_failed": "摘要失败，使用近期对话",
 }
 STYLE = """
 :root{color-scheme:light;--ink:#182432;--muted:#687582;--line:#e3e9ee;--accent:#087f8c}

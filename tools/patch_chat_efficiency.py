@@ -95,9 +95,13 @@ def configure_policy(target: Path) -> None:
             }
             changed = True
         if isinstance(provider.get("companion_context"), dict):
-            if "summary_background" not in provider["companion_context"]:
-                provider["companion_context"]["summary_background"] = True
-                changed = True
+            for name, default in {
+                "summary_background": True, "history_max_age_hours": 72,
+                "history_image_recent_rounds": 4, "history_image_max_age_hours": 24,
+            }.items():
+                if name not in provider["companion_context"]:
+                    provider["companion_context"][name] = default
+                    changed = True
     if changed:
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
