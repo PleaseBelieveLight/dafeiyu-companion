@@ -137,7 +137,9 @@ def apply():
     webui["autoLoginAccount"] = settings["bot_qq"].strip()
     write_json(nc / "webui.json", webui)
 
-    config = read_json(DATA / "cmd_config.json", DEFAULT_CONFIG)
+    config_path = DATA / "cmd_config.json"
+    first_configuration = not config_path.exists()
+    config = read_json(config_path, DEFAULT_CONFIG)
     owner = settings["owner_qq"].strip()
     friends = [v.strip() for v in settings["friend_qqs"].replace("，", ",").split(",") if v.strip()]
     groups = [v.strip() for v in settings["group_ids"].replace("，", ",").split(",") if v.strip()]
@@ -302,14 +304,16 @@ def apply():
         }
     )
     config["agent_runner"]["config"]["model"]["provider_id"] = "deepseek_chat"
-    config["agent_runner"]["config"]["persona"]["persona_id"] = "大肥鱼"
+    # Initialize once so later configuration saves preserve dashboard persona selections.
+    if first_configuration:
+        config["agent_runner"]["config"]["persona"]["persona_id"] = "大肥鱼"
     config["agent_runner"]["config"]["misc"].update({"max_steps": 40, "tool_call_timeout": 300})
     from patch_chat_boundaries import configure_group_settings
     from patch_experience import configure_experience_plugin
 
     configure_group_settings(config)
     config["kb_names"] = ["大肥鱼手册", "热梗词典"] if local_memory else []
-    write_json(DATA / "cmd_config.json", config)
+    write_json(config_path, config)
 
     plugins = DATA / "plugins"
     for plugin in plugins.iterdir():
